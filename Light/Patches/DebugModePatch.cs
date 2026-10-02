@@ -121,12 +121,16 @@ namespace Light.Patches
                     Language.Translate("config.debug.enabled", "启用调试模式"),
                     Language.Translate("config.debug.enabled.detail", "调试模式下游戏无法正常结束。"));
 
+                // 【Nebula 风格】用 lambda 决定可见性：调试模式开启时才显示这一项。
+                // 每次值变化都会重新求值（ConfigUIPanel.Refresh 按注册表全量对比），
+                // 所以勾上"启用调试模式"后这一行**立即**出现，不需要重开菜单。
+                // 等价写法：.SetDependsOn(Enabled) 或 .SetVisibleWhen(() => Enabled.GetBool())
                 DummyCount = Block.AddConfiguration(
                     DebugMode.KeyDummyCount, 0, 0, 14, 1,
                     Language.Translate("config.debug.dummyCount", "生成假人的数量"),
-                    Language.Translate("config.debug.dummyCount.detail", "开局时生成的假人（AI）数量。"))
-                    .WithSuffix(ConfigSuffix.None)
-                    .SetDependsOn(Enabled);
+                    Language.Translate("config.debug.dummyCount.detail", "开局时生成的假人（AI）数量。"),
+                    visibleWhen: () => Enabled != null && Enabled.GetBool())
+                    .WithSuffix(ConfigSuffix.None);
 
                 // 值变化后走同步（只有房主生效）并弹原版设置变更提示
                 Enabled.OnChanged += item => ConfigSync.RaiseAndSync(item);

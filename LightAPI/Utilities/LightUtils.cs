@@ -8,6 +8,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -95,7 +96,7 @@ public static class LightUtils
 
                 _renderer = _flashObject.AddComponent<SpriteRenderer>();
                 var texture = Texture2D.whiteTexture;
-                _renderer.sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+                _renderer.sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new UnityEngine.Vector2(0.5f, 0.5f));
                 _renderer.sortingOrder = 999999999;
                 _renderer.gameObject.layer = LayerMask.NameToLayer("UI");
             }
@@ -166,7 +167,195 @@ public static class LightUtils
         _currentCoroutine = null;
     }
     #endregion
+    #region TREE
+    public static BigInteger TREE(int n)
+    {
+        if (n < 1) throw new ArgumentOutOfRangeException(nameof(n));
 
+        BigInteger best = 0;
+        var seq = new List<(int[] label, int[] parent)>();
+
+        void Search()
+        {
+            if (seq.Count > best) best = seq.Count;
+
+            int nextIndex = seq.Count + 1; // 下一棵树是第 nextIndex 棵，大小 <= nextIndex
+
+            foreach (var candidate in GenerateTrees(n, nextIndex))
+            {
+                bool ok = true;
+
+                foreach (var old in seq)
+                {
+                    if (Embeds(old, candidate))
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if (!ok) continue;
+
+                seq.Add(candidate);
+                Search();
+                seq.RemoveAt(seq.Count - 1);
+            }
+        }
+
+        IEnumerable<(int[] label, int[] parent)> GenerateTrees(int colors, int maxSize)
+        {
+            for (int size = 1; size <= maxSize; size++)
+                foreach (var t in GenerateTreesOfSize(colors, size))
+                    yield return t;
+        }
+
+        IEnumerable<(int[] label, int[] parent)> GenerateTreesOfSize(int colors, int size)
+        {
+            foreach (var parent in GenerateParents(size))
+                foreach (var label in GenerateLabels(colors, size))
+                    yield return ((int[])label.Clone(), (int[])parent.Clone());
+        }
+
+        IEnumerable<int[]> GenerateParents(int size)
+        {
+            if (size == 1)
+            {
+                yield return new[] { -1 };
+                yield break;
+            }
+
+            var parent = new int[size];
+            parent[0] = -1;
+
+            foreach (var p in GenerateParentsRec(parent, 1))
+                yield return p;
+        }
+
+        IEnumerable<int[]> GenerateParentsRec(int[] parent, int idx)
+        {
+            if (idx == parent.Length)
+            {
+                yield return (int[])parent.Clone();
+                yield break;
+            }
+
+            for (int p = 0; p < idx; p++)
+            {
+                parent[idx] = p;
+                foreach (var r in GenerateParentsRec(parent, idx + 1))
+                    yield return r;
+            }
+        }
+
+        IEnumerable<int[]> GenerateLabels(int colors, int size)
+        {
+            var label = new int[size];
+
+            foreach (var l in GenerateLabelsRec(label, 0, colors))
+                yield return l;
+        }
+
+        IEnumerable<int[]> GenerateLabelsRec(int[] label, int idx, int colors)
+        {
+            if (idx == label.Length)
+            {
+                yield return (int[])label.Clone();
+                yield break;
+            }
+
+            for (int c = 0; c < colors; c++)
+            {
+                label[idx] = c;
+                foreach (var r in GenerateLabelsRec(label, idx + 1, colors))
+                    yield return r;
+            }
+        }
+
+        bool Embeds((int[] label, int[] parent) a, (int[] label, int[] parent) b)
+        {
+            if (a.label.Length > b.label.Length) return false;
+            if (a.label[0] != b.label[0]) return false; // 有根树：根必须映到根
+
+            int na = a.label.Length;
+            int nb = b.label.Length;
+
+            // anc[u, v] == true 表示 u 是 v 的祖先（包含自己）
+            var anc = new bool[nb, nb];
+            for (int v = 0; v < nb; v++)
+            {
+                int cur = v;
+                while (cur != -1)
+                {
+                    anc[cur, v] = true;
+                    cur = b.parent[cur];
+                }
+            }
+
+            var map = new int[na];
+            for (int i = 0; i < na; i++) map[i] = -1;
+
+            map[0] = 0;
+            return Match(a, b, anc, 1, map);
+        }
+
+        bool Match(
+            (int[] label, int[] parent) a,
+            (int[] label, int[] parent) b,
+            bool[,] anc,
+            int ai,
+            int[] map)
+        {
+            if (ai == a.label.Length) return true;
+
+            for (int bi = 0; bi < b.label.Length; bi++)
+            {
+                if (map.Contains(bi)) continue;
+                if (a.label[ai] != b.label[bi]) continue;
+
+                bool ok = true;
+
+                for (int aj = 0; aj < ai; aj++)
+                {
+                    int bj = map[aj];
+
+                    if (IsAncestor(a.parent, aj, ai) && !anc[bj, bi])
+                    {
+                        ok = false;
+                        break;
+                    }
+
+                    if (IsAncestor(a.parent, ai, aj) && !anc[bi, bj])
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if (!ok) continue;
+
+                map[ai] = bi;
+                if (Match(a, b, anc, ai + 1, map)) return true;
+                map[ai] = -1;
+            }
+
+            return false;
+        }
+
+        bool IsAncestor(int[] parent, int u, int v)
+        {
+            int cur = v;
+            while (cur != -1)
+            {
+                if (cur == u) return true;
+                cur = parent[cur];
+            }
+            return false;
+        }
+
+        Search();
+        return best;
+    }
+    #endregion
     public static ClientData? GetClient(PlayerControl player)
     {
         try

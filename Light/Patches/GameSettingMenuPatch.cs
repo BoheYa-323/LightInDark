@@ -15,37 +15,112 @@ using UColor = UnityEngine.Color;
 namespace Light.Patches;
 
 /// <summary>
-/// 原版规则编辑界面（GameSettingMenu）改造 —— 框架版（本轮只搭界面，功能下一轮）：
-///  - 保留原版三个主按钮（样式/位置不动），仅把第三个按钮文本改为「MOD 设置」；
-///  - 「游戏设置」页签保留原版内容不动；
-///  - 「预设」页签替换为 4 按钮框架（各 1 张常态图 + 1 张高光图 + 下方文字 + 点击暂无效果）；
-///  - 「MOD 设置」页签替换为 6 个彩色边框标签（不显示文字，边框中间放该标签的常态/悬停图），
-///    点击标签在下方显示「XX页签暂未实现。」。
+/// 原版规则编辑界面（GameSettingMenu）改造。
+///
+/// 左边栏 = 8 个页签（**克隆原版按钮**，两列排布）：
+///   左列 从上到下：预设 / 游戏设置 / MOD / 幽灵
+///   右列 从上到下：船员 / 内鬼 / 中立 / 附加
+/// 每个页签右侧有一个小图标位（TONE 里"星星"的位置），三态：
+///   常态 = 未选中图（原始大小）／悬浮 = 未选中图（放大）／选中 = 选中图（保持放大）。
+///   放大使用**绝对缩放**，反复点击不会累积变大。
+///
+/// 页签切换交给原版 <c>GameSettingMenu.ChangeTab</c>（由原版负责互斥/遮罩/描述文字），
+/// 我们只负责各页内容：预设页 = 4 按钮框架；游戏设置 = 原版不动；
+/// MOD/幽灵/船员/内鬼/中立/附加 = 配置项面板或「暂未实现」占位。
+///
+/// 配置行用原版控件渲染（见 Light.UI.Config.ConfigUIPanel），
+/// 行模板取自 <c>GameSettingMenu.GameSettingsTab</c> 的私有预制体字段。
+///
 /// 美术资源按约定路径从嵌入资源加载（见 LoadTabAndPresetAssets），文件缺失时保持占位、不崩。
+///
+/// ─────────────────────────────────────────────────────────────
+/// 【借鉴声明】页签的实现方式借鉴自 TONE（Town of Next，社区常称 ToN/TONE）：
+///   · 克隆原版按钮当页签模板、替换 OnClick、用 ChangeTab 切页 —— TONE\Patches\GameSettingMenuPatch.cs
+///   · 配置行从 GameOptionsMenu 的私有预制体字段克隆，并合成 BaseGameSetting 走 SetUpFromData
+///     —— TONE\Patches\GameOptionsMenuPatch.cs（其 GetSetting / CreateSettingsPrefix）
+/// 本项目按其思路用 IL2CPP interop 重写，未直接复制代码。感谢 TONE 作者。
+/// ─────────────────────────────────────────────────────────────
 /// </summary>
 [HarmonyPatch]
 public static class GameSettingMenuPatch
 {
-    /// <summary>MOD 设置页 6 个分类标签：彩色边框，不显示文字，中间留空放图标。</summary>
-    private static readonly (string Key, string Cn, UColor BorderColor)[] ModTabs =
+    /// <summary>
+    /// 左边栏 8 个页签（克隆原版按钮样式），**坐标照抄 TONE**。
+    ///
+    /// TONE 的排布算法（GameSettingMenuPatch.cs:71-73）：
+    ///   offset = (0, 0.5 * ((t+1)/2), 0)
+    ///   pos    = (((t+1) % 2 == 0) ? Left(-3.9,-0.4) : Right(-2.4,-0.4)) - offset
+    ///   scale  = (0.45, 0.6, 1)
+    /// 即从下往上、左右交错：t=0 在右下，t=1 在左上，逐排上升。
+    ///
+    /// 我们的编号与 TONE 的视觉顺序对齐（用户指定）：
+    ///   左列从上到下：预设 / 游戏设置 / MOD / 幽灵
+    ///   右列从上到下：船员 / 内鬼 / 中立 / 附加
+    /// 所以把 TONE 的"从下往上"结果反排到我们的数组下标上。
+    /// </summary>
+    private static readonly (string Key, string Cn, int Column, int Row)[] VanillaTabs =
     {
-        ("MOD",   "MOD",  new UColor(0.55f, 0.55f, 0.55f, 1f)), // 灰
-        ("CREWS", "船员",  new UColor(0.20f, 0.55f, 1.00f, 1f)), // 蓝
-        ("IMP",   "内鬼",  new UColor(1.00f, 0.25f, 0.20f, 1f)), // 红
-        ("NEU",   "中立",  new UColor(0.55f, 0.55f, 0.55f, 1f)), // 灰
-        ("MODI",  "附加",  new UColor(1.00f, 0.85f, 0.20f, 1f)), // 黄
-        ("GHOST", "幽灵",  new UColor(0.90f, 0.90f, 0.90f, 1f)), // 白
+        // 左列（Column=0），TONE 的 x=-3.9；从上往下 Row 递增
+        ("Preset",       "预设",     0, 0),
+        ("GameSettings", "游戏设置", 0, 1),
+        ("Mod",          "MOD",     0, 2),
+        ("Ghost",        "幽灵",     0, 3),
+        // 右列（Column=1），TONE 的 x=-2.4
+        ("Crewmate",     "船员",     1, 0),
+        ("Impostor",     "内鬼",     1, 1),
+        ("Neutral",      "中立",     1, 2),
+        ("Modifier",     "附加",     1, 3),
     };
 
-    /// <summary>各标签对应的配置分类（与 ModTabs 下标一一对应）。</summary>
-    private static readonly ConfigCategory[][] ModTabCategories =
+    /// <summary>页签下标常量（供别处引用）。</summary>
+    private const int TabPreset = 0;
+    private const int TabGameSettings = 1;
+    private const int TabMod = 2;
+    private const int TabGhost = 3;
+    private const int TabCrewmate = 4;
+    private const int TabImpostor = 5;
+    private const int TabNeutral = 6;
+    private const int TabModifier = 7;
+
+    // =====================================================================
+    //  配色（用户指定）
+    //   · MOD/预设/游戏设置 → 中性色
+    //   · 职业类页签        → 用它们**原本的描边色**（与 FS / ToN 的职业配色一致）
+    //   · 按钮边框          → 淡金色
+    // =====================================================================
+
+    /// <summary>淡金色（按钮边框）。</summary>
+    private static readonly UColor PaleGold = new(0.85f, 0.72f, 0.38f, 1f);
+    /// <summary>淡金色（更亮一档，用于选中态）。</summary>
+    private static readonly UColor PaleGoldBright = new(1f, 0.88f, 0.55f, 1f);
+
+    /// <summary>
+    /// 各页签文字/描边色。职业类沿用原版的职业配色（"原本的描边色"）：
+    ///   船员 #8CFFFF / 内鬼 #FF1919 / 中立 #7F8C8D / 附加 #FF9ACE / 幽灵 #E7E7E7
+    /// 非职业页签用中性灰白。
+    /// </summary>
+    private static UColor RoleTabTextColor(int index)
     {
-        new[] { ConfigCategory.Mod, ConfigCategory.Debug }, // MOD：通用 + 调试
-        new[] { ConfigCategory.Crewmate },
-        new[] { ConfigCategory.Impostor },
-        new[] { ConfigCategory.Neutral },
-        new[] { ConfigCategory.Modifier },
-        new[] { ConfigCategory.Ghost },
+        switch (index)
+        {
+            case TabCrewmate: return new UColor(0.549f, 1.000f, 1.000f, 1f);   // #8CFFFF
+            case TabImpostor: return new UColor(1.000f, 0.098f, 0.098f, 1f);   // #FF1919
+            case TabNeutral:  return new UColor(0.498f, 0.549f, 0.553f, 1f);   // #7F8C8D
+            case TabModifier: return new UColor(1.000f, 0.604f, 0.808f, 1f);   // #FF9ACE
+            case TabGhost:    return new UColor(0.906f, 0.906f, 0.906f, 1f);   // #E7E7E7
+            default:          return MenuTextTemplate.GlowWhite;               // 预设/游戏设置/MOD
+        }
+    }
+
+    /// <summary>各 MOD 类页签对应的配置分类（预设/游戏设置为原版功能，不在其中）。</summary>
+    private static readonly ConfigCategory[] TabCategories =
+    {
+        ConfigCategory.Mod,        // Mod
+        ConfigCategory.Ghost,      // Ghost
+        ConfigCategory.Crewmate,   // Crewmate
+        ConfigCategory.Impostor,   // Impostor
+        ConfigCategory.Neutral,    // Neutral
+        ConfigCategory.Modifier,   // Modifier
     };
 
     private static readonly string[] PresetLabels =
@@ -55,22 +130,25 @@ public static class GameSettingMenuPatch
 
     // =====================================================================
     //  美术资源槽位
-    //  预设页 4 按钮：各 1 张常态 + 1 张高光 = 8 张
-    //  MOD 页 6 标签：各 1 张常态 + 1 张悬停 = 12 张
+    //
     //  约定路径（相对 Light.Resources，即 Light\Resources\ 下）：
-    //    预设 → GUI\Preset\<名字>Normal.png / <名字>Hover.png
-    //    标签 → GUI\RoleTab\<Key>Normal.png / <Key>Hover.png
-    //  文件缺失时该项保持 null → 走原有暗色占位 / 空图标槽，不崩。
+    //    页签图标 → Configuration\Settings\Tab_{Key}_0.png   （常态/未选中）
+    //               Configuration\Settings\Tab_{Key}_1.png   （选中）
+    //      Key ∈ Preset / GameSettings / Mod / Ghost / Crewmate / Impostor / Neutral / Modifier
+    //    预设页按钮 → GUI\Preset\<名字>Normal.png / <名字>Hover.png
+    //
+    //  文件缺失时该项保持 null → 走占位（图标槽留空），不崩。
+    //  所以"只画好了其中几张"也能正常工作。
     // =====================================================================
+
+    /// <summary>页签图标 8 张常态图 + 8 张选中图（顺序同 <see cref="VanillaTabs"/>）。</summary>
+    private static readonly Sprite?[] _tabIconNormal = new Sprite?[8];
+    private static readonly Sprite?[] _tabIconSelected = new Sprite?[8];
 
     /// <summary>预设按钮 4 张常态图（顺序同 <see cref="PresetLabels"/>）。</summary>
     private static readonly Sprite?[] _presetNormal = new Sprite?[4];
     /// <summary>预设按钮 4 张高光图（顺序同上）。</summary>
     private static readonly Sprite?[] _presetHover = new Sprite?[4];
-    /// <summary>MOD 标签 6 张常态图（顺序同 <see cref="ModTabs"/>）。</summary>
-    private static readonly Sprite?[] _tabNormal = new Sprite?[6];
-    /// <summary>MOD 标签 6 张悬停图（顺序同上）。</summary>
-    private static readonly Sprite?[] _tabHover = new Sprite?[6];
 
     private static bool _assetsLoaded;
 
@@ -81,8 +159,7 @@ public static class GameSettingMenuPatch
     };
 
     /// <summary>
-    /// 载入全部槽位图片。每个文件独立 try/catch 且缺失即留 null，
-    /// 因此"只画好了其中几张"也能正常工作。
+    /// 载入全部槽位图片。每个文件独立 try/catch 且缺失即留 null。
     /// </summary>
     private static void LoadTabAndPresetAssets()
     {
@@ -95,18 +172,19 @@ public static class GameSettingMenuPatch
             _presetHover[i] = TryLoad($"GUI/Preset/{PresetFileNames[i]}Hover.png");
         }
 
-        for (int i = 0; i < ModTabs.Length && i < _tabNormal.Length; i++)
+        for (int i = 0; i < VanillaTabs.Length && i < _tabIconNormal.Length; i++)
         {
-            _tabNormal[i] = TryLoad($"GUI/RoleTab/{ModTabs[i].Key}Normal.png");
-            _tabHover[i] = TryLoad($"GUI/RoleTab/{ModTabs[i].Key}Hover.png");
+            string key = VanillaTabs[i].Key;
+            _tabIconNormal[i] = TryLoad($"Configuration/Settings/Tab_{key}_0.png");
+            _tabIconSelected[i] = TryLoad($"Configuration/Settings/Tab_{key}_1.png");
         }
 
-        int ok = 0;
-        foreach (var s in _presetNormal) if (s != null) ok++;
-        foreach (var s in _presetHover) if (s != null) ok++;
-        foreach (var s in _tabNormal) if (s != null) ok++;
-        foreach (var s in _tabHover) if (s != null) ok++;
-        LightLogger.Log($"[GameSettingMenuPatch] 槽位图片载入完成：{ok}/20 张（缺失项保持占位）");
+        int ok = 0, miss = 0;
+        foreach (var s in _presetNormal) { if (s != null) ok++; else miss++; }
+        foreach (var s in _presetHover) { if (s != null) ok++; else miss++; }
+        foreach (var s in _tabIconNormal) { if (s != null) ok++; else miss++; }
+        foreach (var s in _tabIconSelected) { if (s != null) ok++; else miss++; }
+        LightLogger.Log($"[GameSettingMenuPatch] 槽位图片载入完成：{ok} 张就绪，{miss} 张缺失（缺失项保持占位）");
     }
 
     /// <summary>从嵌入资源按相对路径取 Sprite；不存在时静默返回 null（不打错误日志）。</summary>
@@ -137,11 +215,19 @@ public static class GameSettingMenuPatch
     }
 
     // ---- 尺寸 ----
-    private const float TabWidth = 0.8f;
-    private const float TabHeight = 0.8f;
-    private const float TabSpacing = 1.05f;
-    private const float TabBorderThickness = 0.06f;
-    private const float IconSize = 0.45f;
+    // 页签坐标**照抄 TONE**（GameSettingMenuPatch.cs:12-15, 71-73）
+    private static readonly Vector3 TabBaseLeft = new(-3.9f, -0.4f, 0f);   // TONE ButtonPositionLeft
+    private static readonly Vector3 TabBaseRight = new(-2.4f, -0.4f, 0f);  // TONE ButtonPositionRight
+    private static readonly Vector3 TabButtonScale = new(0.45f, 0.6f, 1f); // TONE ButtonSize
+    private const float TabRowStep = 0.5f;                                 // TONE 每排上升 0.5
+
+    // 图标位（页签右侧，TONE 星星的位置）
+    private const float TabIconOffsetX = 1.15f;
+    private static readonly Vector2 TabIconSize = new(0.34f, 0.34f);
+    private const float TabIconHoverScale = 1.45f;   // 悬浮/选中时的**绝对**缩放（不累乘）
+
+    /// <summary>原版 3 个按钮被挪去的远处坐标（不销毁，避免删组件出 bug）。</summary>
+    private static readonly Vector3 VanillaButtonsParkPosition = new(0f, -100f, 0f);
 
     private const float PresetWidth = 1.5f;
     private const float PresetHeight = 0.75f;
@@ -152,10 +238,17 @@ public static class GameSettingMenuPatch
     private static GameObject? _presetsPage;
     private static GameObject? _modPage;
     private static TextMeshPro? _modPlaceholderText;
-    /// <summary>当前打开的 MOD 页标签下标（职业配置页返回列表时用）。</summary>
-    private static int _currentTab;
-    /// <summary>6 个标签按钮（打开职业配置新页面时整行隐藏）。</summary>
-    private static readonly GameObject?[] _tabButtons = new GameObject?[6];
+    /// <summary>
+    /// 当前的 GameSettingMenu 实例。
+    /// ⚠️ 原版**没有** <c>GameSettingMenu.Instance</c> 这个静态字段，是我们自己在
+    /// <see cref="StartPostfix"/> 里记下来的（TONE 同样做法），供按钮回调使用。
+    /// </summary>
+    public static GameSettingMenu? Instance { get; private set; }
+
+    /// <summary>当前打开的页签下标。</summary>
+    private static int _currentTab = TabMod;
+    /// <summary>8 个页签按钮。</summary>
+    private static readonly GameObject?[] _tabButtons = new GameObject?[8];
 
     // =====================================================================
     //  Harmony Patches
@@ -167,8 +260,21 @@ public static class GameSettingMenuPatch
     {
         try
         {
-            RenameThirdTabButton(__instance);
+            // ⚠️ 必须自己记住实例：原版 GameSettingMenu 没有静态 Instance 字段，
+            // 我们要在按钮回调里用它调 ChangeTab。（TONE 也是自己在 Start 里赋值：
+            // TONE\Patches\GameSettingMenuPatch.cs:23,29 `Instance = __instance;`）
+            Instance = __instance;
+
             BuildPages(__instance);
+
+            // 原版 3 个按钮不删，挪到远处（省得删组件出 bug）
+            ParkVanillaButtons(__instance);
+
+            // ⚠️ 必须先克隆页签菜单：配置行要铺进真 GameOptionsMenu 才会渲染
+            CreateTabMenus(__instance);
+
+            // 左边栏 8 个页签（克隆原版按钮，两列 + 图标位）
+            CreateVanillaTabs(__instance);
 
             // 构建完成后立刻应用一次，确保刚打开的页签不会同时露出原版内容
             ApplyPresetsVisibility();
@@ -188,6 +294,8 @@ public static class GameSettingMenuPatch
         _presetsPage = null;
         _modPage = null;
         _modPlaceholderText = null;
+        Instance = null;
+        for (int i = 0; i < _tabMenus.Length; i++) _tabMenus[i] = null;
         Light.UI.Config.ConfigUIPanel.Clear();
         Light.UI.Config.RoleListPage.Clear();
     }
@@ -244,11 +352,18 @@ public static class GameSettingMenuPatch
     {
         try
         {
+            // ⚠️ 这里**不要**再 SetActive(false) 原版 RoleSettingsTab：
+            //    它会触发 RolesSettingsMenu/GameOptionsMenu 的 OnDisable → CloseMenu
+            //    → ControllerManager 递归（栈溢出来源）。
+            //    原版角色页的隐藏改由"激活我们的克隆菜单"自然盖上，
+            //    并在 ClearVanillaContent 里关掉它的背景板。
+
             if (_modPage == null) return;
-            var parent = _modPage.transform.parent;
-            if (parent == null) return;
-            HideChildrenExcept(parent, _modPage);
-            _modPage.SetActive(true);
+            // 只在我们确实要显示时才打开（预设/游戏设置页签下不显示）
+            if (_currentTab != TabPreset && _currentTab != TabGameSettings)
+            {
+                _modPage.SetActive(true);
+            }
         }
         catch (Exception ex)
         {
@@ -310,6 +425,35 @@ public static class GameSettingMenuPatch
         try
         {
             if (_presetsPage != null || _modPage != null) return;
+
+            // ⚠️ 先把原版 GameOptionsMenu 交给配置面板当"模板源"。
+            // 它持有 checkboxOrigin / numberOptionOrigin / stringOptionOrigin / categoryHeaderOrigin
+            // 这些私有预制体字段，配置行必须从它们克隆。
+            // 不能等 GameOptionsMenu.Initialize：我们的 MOD 页签是 RolesSettingsMenu，
+            // 原版 GameSettingsTab 永远不会被打开 → Initialize 不跑 → 模板源永远是 null
+            // （表现为"分类头出来了、但一行都没有"）。
+            // GameSettingMenu.GameSettingsTab 是**活的实例**，在 Start 时就能拿到（ToN 同做法）。
+            try
+            {
+                var liveMenu = menu.GameSettingsTab;
+                if (liveMenu != null)
+                {
+                    Light.UI.Config.ConfigUIPanel.SetTemplateSource(liveMenu);
+                    LightLogger.Log($"[GameSettingMenuPatch] 配置模板源已登记：{liveMenu.name} " +
+                                    $"(checkbox={(liveMenu.checkboxOrigin != null)}, " +
+                                    $"number={(liveMenu.numberOptionOrigin != null)}, " +
+                                    $"string={(liveMenu.stringOptionOrigin != null)}, " +
+                                    $"header={(liveMenu.categoryHeaderOrigin != null)})");
+                }
+                else
+                {
+                    LightLogger.LogWarning("[GameSettingMenuPatch] GameSettingsTab 为 null，配置行无法克隆");
+                }
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[GameSettingMenuPatch] 登记配置模板源失败", ex);
+            }
 
             // 预设页容器（原版预设 Tab）
             var presetsTab = menu.transform.Find("PresetsTab")
@@ -409,22 +553,44 @@ public static class GameSettingMenuPatch
     }
 
     // ---------------------------------------------------------------------
-    //  MOD 设置页：6 彩色边框标签框架
+    //  左边栏：8 个页签（克隆原版按钮样式，两列排布）
+    //
+    //  借鉴 TONE(Town of Next) 的做法：克隆原版 GameSettingsButton 当模板，
+    //  替换 OnClick 后用 GameSettingMenu.ChangeTab(index, false) 切页，
+    //  而不是自己 SetActive 各页 —— 让原版负责页签互斥、遮罩与描述文字。
+    //  参考：TONE\Patches\GameSettingMenuPatch.cs 的 StartPostfix / ChangeTabPrefix
     // ---------------------------------------------------------------------
+
+    /// <summary>克隆原版按钮得到"页签模板"（TONE 同款做法）。</summary>
+    private static PassiveButton? _tabButtonTemplate;
+
+    private static PassiveButton? GetTabButtonTemplate(GameSettingMenu menu)
+    {
+        if (_tabButtonTemplate != null) return _tabButtonTemplate;
+        try
+        {
+            var src = menu.GameSettingsButton;
+            if (src == null) return null;
+
+            // 克隆一个挂在同一父级下、隐藏起来的模板
+            var clone = Object.Instantiate(src, src.transform.parent);
+            clone.gameObject.name = "LightTabButtonTemplate";
+            clone.gameObject.SetActive(false);
+            _tabButtonTemplate = clone;
+            return clone;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.GetTabButtonTemplate]", ex);
+            return null;
+        }
+    }
 
     private static GameObject BuildModPage(Transform parent)
     {
         LoadTabAndPresetAssets();
 
         var page = NewUIObject("LightModSettingsPage", parent, new Vector3(0f, 1.2f, -2.5f));
-
-        for (int i = 0; i < ModTabs.Length; i++)
-        {
-            int idx = i;
-            _tabButtons[i] = CreateTabButton(page.transform, ModTabs[i].Key, ModTabs[i].BorderColor,
-                new Vector2((i - 2.5f) * TabSpacing, 0.8f),
-                (UnityAction)(() => OnModTabClicked(idx)), i);
-        }
 
         // 占位提示（无内容分类显示「XX页签暂未实现。」）
         _modPlaceholderText = CloneText(page.transform, new Vector3(0f, -0.8f, -0.1f), "", 1.5f);
@@ -433,104 +599,647 @@ public static class GameSettingMenuPatch
     }
 
     /// <summary>
-    /// 彩色边框标签：边框 = 4 条代码色块（白 sprite tint 成边框色），
-    /// 中间放该标签自己的常态图 + 悬停图（6 组共 12 张，资源缺失时中间留空）。
-    /// 标签上不显示文字。
+    /// 在左边栏创建 8 个页签按钮（克隆原版按钮），每个右侧带一个小图标位。
+    ///
+    /// 图标三态（按用户要求）：
+    ///   · 常态      → 未选中图，原始大小
+    ///   · 鼠标悬浮  → **仍未选中图**，但放大
+    ///   · 已选中    → 选中图，保持放大
+    /// 放大用固定的"放大后尺寸"，**不会累积**（反复点击也只是一直维持放大态）。
     /// </summary>
-    private static GameObject CreateTabButton(Transform parent, string key, UColor borderColor,
-        Vector2 pos, UnityAction onClick, int index)
-    {
-        var normal = index < _tabNormal.Length ? _tabNormal[index] : null;
-        var hover = index < _tabHover.Length ? _tabHover[index] : null;
-
-        var go = NewUIObject($"LightModTab_{key}", parent, new Vector3(pos.x, pos.y, 0f));
-
-        float halfW = TabWidth * 0.5f;
-        float halfH = TabHeight * 0.5f;
-        float t = TabBorderThickness;
-
-        // 上下左右四条边框
-        MakeRect(go.transform, "Top", TabWidth, t, 0f, halfH - t * 0.5f, borderColor);
-        MakeRect(go.transform, "Bottom", TabWidth, t, 0f, -halfH + t * 0.5f, borderColor);
-        MakeRect(go.transform, "Left", t, TabHeight - t * 2f, -halfW + t * 0.5f, 0f, borderColor);
-        MakeRect(go.transform, "Right", t, TabHeight - t * 2f, halfW - t * 0.5f, 0f, borderColor);
-
-        // 中间图标槽位（图片未提供时为空，只有边框可见）
-        var icon = NewUIObject("IconSlot", go.transform, Vector3.zero);
-        var iconSr = icon.AddComponent<SpriteRenderer>();
-        iconSr.sprite = normal;                                  // 资源未提供 → null
-        iconSr.drawMode = SpriteDrawMode.Sliced;
-        iconSr.size = new Vector2(IconSize, IconSize);
-
-        // 点击区域 + PassiveButton
-        AddButtonArea(go, TabWidth, TabHeight);
-
-        var pb = go.SetUpButton(true, null, null, null, false);
-        pb.OnClick.AddListener(onClick);
-        pb.OnMouseOver.AddListener((UnityAction)(() =>
-        {
-            if (hover != null) iconSr.sprite = hover;
-        }));
-        pb.OnMouseOut.AddListener((UnityAction)(() =>
-        {
-            if (normal != null) iconSr.sprite = normal;
-        }));
-        return go;
-    }
-
-    private static void OnModTabClicked(int index)
+    private static void CreateVanillaTabs(GameSettingMenu menu)
     {
         try
         {
-            ShowTabConfig(index);
+            var template = GetTabButtonTemplate(menu);
+            if (template == null)
+            {
+                LightLogger.LogWarning("[GameSettingMenuPatch] 未取得页签按钮模板，跳过建页签");
+                return;
+            }
+
+            var parent = menu.GameSettingsButton.transform.parent;
+
+            for (int i = 0; i < VanillaTabs.Length; i++)
+            {
+                var (key, cn, column, row) = VanillaTabs[i];
+                int idx = i;
+
+                var btn = Object.Instantiate(template, parent);
+                btn.gameObject.name = $"LightTab_{key}";
+                btn.gameObject.SetActive(true);
+                _tabButtons[i] = btn.gameObject;
+
+                // 位置：两列。左列 column=0，右列 column=1；行从上到下。
+                var pos = TabPosition(column, row);
+                btn.transform.localPosition = new Vector3(pos.x, pos.y, -2f);
+                btn.transform.localScale = TabButtonScale;
+
+                // 文字：原版按钮自带 TMP → 换成**辉光白那套字体**（用户要求）
+                var label = btn.GetComponentInChildren<TextMeshPro>();
+                if (label != null)
+                {
+                    var tr = label.GetComponent<TextTranslatorTMP>();
+                    if (tr != null) tr.enabled = false;
+
+                    var menuFont = MenuTextTemplate.MenuFont;
+                    if (menuFont != null) label.font = menuFont;
+
+                    label.text = cn;
+                    label.fontStyle = FontStyles.UpperCase;
+                    label.color = RoleTabTextColor(i);   // 职业页签用其原本的描边色
+                    label.outlineWidth = 0.17f;          // 与 ToN 的分类头一致
+                }
+
+                // ⚠️ AGENTS.md §4.5：克隆原版控件必须**整体替换** OnClick
+                btn.OnClick = new UnityEngine.UI.Button.ButtonClickedEvent();
+                btn.OnClick.AddListener((UnityAction)(() => OnVanillaTabClicked(idx)));
+
+                // 图标位（在页签旁边，即 TONE 那个"星星"的位置）
+                CreateTabIcon(btn, i);
+
+                // FS 主界面风格的配色 + 淡金色边框（用户要求）
+                ApplyFsButtonStyle(btn, RoleTabTextColor(i));
+
+                // ⚠️ 原版按钮的**高光**来自 PassiveButton 的 activeSprites + SelectButton(true)，
+                //    不是 OnMouseOver。我们替换 OnClick 时不会破坏它，但必须自己调用
+                //    SelectButton 来驱动，否则页签永远停在 inactive（= 没有高光）。
+                //    OnMouseOver/OnMouseOut 是**追加**监听（原版的视觉逻辑仍在），
+                //    这里只额外驱动我们自己的图标状态。
+                btn.OnMouseOver.AddListener((UnityAction)(() => SetTabIconState(idx, hover: true)));
+                btn.OnMouseOut.AddListener((UnityAction)(() => SetTabIconState(idx, hover: false)));
+            }
+
+            // 默认选中 MOD 页签（显示高光）
+            RefreshTabSelection();
+            LightLogger.Log($"[GameSettingMenuPatch] 已创建 {VanillaTabs.Length} 个页签");
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[GameSettingMenuPatch.OnModTabClicked]", ex);
+            LightLogger.LogError("[GameSettingMenuPatch.CreateVanillaTabs]", ex);
         }
     }
 
     /// <summary>
-    /// 切换到某标签（两级布局）：
-    ///  - 该分类下有职业块（lid.role.*）→ 显示职业按钮列表，点击进入职业配置页；
-    ///  - 只有其他块（MOD/调试）→ 平铺渲染；
-    ///  - 什么都没有 → 占位提示。
+    /// 刷新所有页签的"选中高光"：只有当前页签调 SelectButton(true)，其余 false。
+    /// 原版 GameSettingMenu.ChangeTab 只对**它自己的**三个按钮做这件事，
+    /// 我们克隆来的 8 个按钮得自己维护。
+    /// </summary>
+    private static void RefreshTabSelection()
+    {
+        try
+        {
+            for (int i = 0; i < VanillaTabs.Length && i < _tabButtons.Length; i++)
+            {
+                var go = _tabButtons[i];
+                if (go == null) continue;
+                var pb = go.GetComponent<PassiveButton>();
+                if (pb == null) continue;
+
+                bool selected = i == _currentTab;
+                pb.SelectButton(selected);
+
+                // 顺带把可交互状态打开（避免克隆体因原状态被禁用而不响应）
+                pb.SetButtonEnableState(true);
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.RefreshTabSelection] {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 把页签按钮做成 **FS(Final Suspect) 主界面按钮**那种样式，并加**淡金色边框**。
+    ///
+    /// 【借鉴 FS】FS 的做法（FinalSuspect\Patches\System\MainMenuManagerPatch.cs:128-130）：
+    ///   克隆主界面的 PlayButton，然后给 PassiveButton 的三套 sprite 上色 ——
+    ///     inactiveSprites → 暗一档（常态）
+    ///     activeSprites   → 亮一档（悬浮/选中）
+    ///   而不是自己画按钮底图。这样形状/圆角/阴影天然与原版一致。
+    ///
+    /// 我们在此之上再补一条**淡金色边框**（用户要求），做法是给按钮对象加一个
+    /// 描边用的 SpriteRenderer（用原版圆角九宫格图拉伸，叠在按钮底图稍后一层）。
+    /// </summary>
+    private static void ApplyFsButtonStyle(PassiveButton btn, UColor accent)
+    {
+        try
+        {
+            // FS 那种"常态暗、悬浮亮"的两档底色（FinalSuspect\MainMenuManagerPatch.cs:128-130）
+            // 用户已明确：**不要**金色描边、**不要**职业色细线（太丑）。
+            // 只保留这套底色，样式交给原版按钮自己的形状。
+            var baseDark = new UColor(0.13f, 0.13f, 0.15f, 0.92f);
+            var baseLite = new UColor(0.24f, 0.24f, 0.28f, 0.98f);
+
+            var inSr = btn.inactiveSprites != null ? btn.inactiveSprites.GetComponent<SpriteRenderer>() : null;
+            if (inSr != null) inSr.color = baseDark;
+
+            var actSr = btn.activeSprites != null ? btn.activeSprites.GetComponent<SpriteRenderer>() : null;
+            if (actSr != null) actSr.color = baseLite;
+
+            var selSr = btn.selectedSprites != null ? btn.selectedSprites.GetComponent<SpriteRenderer>() : null;
+            if (selSr != null) selSr.color = baseLite;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.ApplyFsButtonStyle] {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 页签坐标，**照抄 TONE 的公式**（GameSettingMenuPatch.cs:71-72）。
+    ///
+    /// TONE 原式对 t=0..7 产出这一组坐标（左右交错、逐排上升 0.5）：
+    ///   t=0 (-2.4,-0.4)  t=1 (-3.9,-0.9)  t=2 (-2.4,-0.9)  t=3 (-3.9,-1.4)
+    ///   t=4 (-2.4,-1.4)  t=5 (-3.9,-1.9)  t=6 (-2.4,-1.9)  t=7 (-3.9,-2.4)
+    ///
+    /// ⚠️ 不能用 <c>0.5 * ((level+1)/2)</c> 这种"再推导一次"的写法：
+    ///   整数除法在相邻两个 level 上会算出同一个 y（-0.9 出现两次）→ 两个页签重叠。
+    ///   所以直接把 TONE 的结果按"列 + 行"列成表。
+    ///
+    /// 映射（用户指定顺序）：
+    ///   左列 x=-3.9，从上到下：预设 / 游戏设置 / MOD / 幽灵
+    ///   右列 x=-2.4，从上到下：船员 / 内鬼 / 中立 / 附加
+    /// </summary>
+    private static Vector2 TabPosition(int column, int row)
+    {
+        // 每列 4 个，y 从高到低（-0.4 最上、-1.9 最下）
+        float y = -0.4f - row * TabRowStep;
+        return new Vector2(column == 0 ? TabBaseLeft.x : TabBaseRight.x, y);
+    }
+
+    /// <summary>
+    /// 处理原版 3 个页签按钮 —— **照抄 TONE 的 SetDefaultButton**
+    /// （TONE\Patches\GameSettingMenuPatch.cs:106-111）。
+    ///
+    /// TONE 的做法很干脆：
+    ///   · GamePresetsButton  → **SetActive(false)** 直接隐藏
+    ///   · GameSettingsButton → 保留（作为"原版游戏设置"页签的原生入口），挪到左上角
+    ///   · RoleSettingsButton → 保留但也被我们自己的页签体系覆盖
+    ///
+    /// 我之前的做法是"挪到 (0,-100,0) 藏起来"，问题是一旦用户从别的页签切回 MOD，
+    /// 原版逻辑又会把它们的 SetActive/位置恢复，于是原版界面又叠上来
+    /// （用户反馈"别的页签点回来MOD就会继续叠"）。
+    /// 按 TONE 这样**直接 SetActive(false)** 才是稳的。
+    /// </summary>
+    private static void ParkVanillaButtons(GameSettingMenu menu)
+    {
+        try
+        {
+            // 预设按钮：TONE 直接隐藏（GameSettingMenuPatch.cs:108）
+            SetActiveSafe(menu.GamePresetsButton?.gameObject, false);
+
+            // 游戏设置按钮：TONE **保留并重定位**（GameSettingMenuPatch.cs:110-111,143-150）。
+            // 之前我以为它"回来了"是 bug，其实 TONE 本来就留着它 ——
+            // 关键是下面要把 ControllerSelectable 重建，否则 ControllerManager
+            // 会拿着旧列表反复开合 → 递归。
+            var gs = menu.GameSettingsButton;
+            if (gs != null)
+            {
+                foreach (var ap in gs.GetComponents<AspectPosition>())
+                    if (ap != null) ap.enabled = false;
+
+                gs.transform.localPosition = TabBaseLeft;        // TONE: ButtonPositionLeft
+                gs.transform.localScale = TabButtonScale;        // TONE: ButtonSize
+            }
+
+            // 角色设置按钮（原版那个）：TONE 明确隐藏（GameSettingMenuPatch.cs:146）
+            SetActiveSafe(menu.RoleSettingsButton?.gameObject, false);
+
+            // ⚠️ 关键（TONE GameSettingMenuPatch.cs:148-150）：
+            //    清空并重建 ControllerSelectable，只留一个默认按钮。
+            //    这是 ControllerManager 递归的第二个来源 —— 旧的 selectable 列表里
+            //    还引用着已被我们隐藏/替换的对象，手柄导航会反复开合菜单。
+            if (gs != null)
+            {
+                menu.DefaultButtonSelected = gs;
+                menu.ControllerSelectable = new Il2CppSystem.Collections.Generic.List<UiElement>();
+                menu.ControllerSelectable.Add(gs);
+            }
+
+            LightLogger.Log("[GameSettingMenuPatch] 原版按钮已处理 + ControllerSelectable 已重建");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.ParkVanillaButtons]", ex);
+        }
+    }
+
+    // =====================================================================
+    //  【核心 · 照抄 TONE】接管 GameSettingMenu.ChangeTab
+    //
+    //  这是栈溢出的**真正解法**。之前我一直让原版 ChangeTab 跑，只在外围打补丁，
+    //  但原版 ChangeTab 会走：
+    //      GameOptionsMenu.OpenMenu() / OnDisable→CloseMenu()
+    //      → ControllerManager.OpenOverlayMenu/CloseOverlayMenu
+    //      → 再次操作菜单状态 → 递归 → 栈溢出
+    //  日志实测 OpenTopmostMenu 40 次、CloseOverlayMenu 73 次就是这个。
+    //
+    //  TONE 的做法（TONE\Patches\GameSettingMenuPatch.cs:325-411）：
+    //    对 ChangeTab 打 **HarmonyPrefix 并 return false** ——
+    //    原版整个方法不执行，TONE 自己用纯 SetActive 完成"切页签"，
+    //    于是 ControllerManager 完全不会被牵扯进来，**不可能递归**。
+    //
+    //  ⚠️ 这正是我前几轮反复失败的原因：我在外围加补丁，却让病根继续运行。
+    // =====================================================================
+
+    [HarmonyPatch(typeof(GameSettingMenu), nameof(GameSettingMenu.ChangeTab))]
+    [HarmonyPrefix]
+    [HarmonyPriority(Priority.First)]
+    public static bool ChangeTabPrefix(GameSettingMenu __instance, ref int tabNum,
+        [HarmonyArgument(1)] bool previewOnly)
+    {
+        try
+        {
+            // 只接管"真正的切换"；手柄预览态仍交回原版（TONE 也保留 previewOnly 分支）
+            if (previewOnly) return true;
+
+            _currentTab = tabNum;
+
+            // ① 关掉所有内容页：原版三个 + 我们克隆的
+            SetActiveSafe(__instance.PresetsTab?.gameObject, false);
+            SetActiveSafe(__instance.GameSettingsTab?.gameObject, false);
+            SetActiveSafe(__instance.RoleSettingsTab?.gameObject, false);
+
+            for (int i = 0; i < _tabMenus.Length; i++)
+                SetActiveSafe(_tabMenus[i]?.gameObject, false);
+
+            // ② 原版三按钮的高光全部熄灭；我们的 8 个按钮由 RefreshTabSelection 处理
+            __instance.GamePresetsButton?.SelectButton(false);
+            __instance.GameSettingsButton?.SelectButton(false);
+            __instance.RoleSettingsButton?.SelectButton(false);
+
+            // ③ 按页签号打开对应页
+            switch (tabNum)
+            {
+                case TabPreset:
+                    SetActiveSafe(__instance.PresetsTab?.gameObject, true);
+                    break;
+
+                case TabGameSettings:
+                    SetActiveSafe(__instance.GameSettingsTab?.gameObject, true);
+                    RefreshVanillaGameSettings(__instance);
+                    break;
+
+                default:
+                    // 其余 6 个都是我们克隆的 GameOptionsMenu
+                    var target = tabNum >= 0 && tabNum < _tabMenus.Length ? _tabMenus[tabNum] : null;
+                    if (target != null)
+                    {
+                        SetActiveSafe(target.gameObject, true);
+                        Light.UI.Config.ConfigUIPanel.SetHostMenu(target);
+
+                        // ⚠️ 每次切页签都要清一次原版内容（不能只依赖 Build）：
+                        //    克隆菜单每次 SetActive(true) 都会走 OnEnable→Initialize，
+                        //    原版内容（分类头"伪装者"/"任务"、地图预览、原版设置行）可能回来。
+                        //    用户反馈"header还是会叠""其他页签还是有游戏设置"就是这个。
+                        Light.UI.Config.ConfigUIPanel.CleanMenu(target);
+
+                        // ⚠️ 原版"伪装者/任务"那些分类头来自原版职业设置页的内容。
+                        //    我们用的是克隆菜单，原版 ROLES TAB 必须保持关闭。
+                        SetActiveSafe(__instance.RoleSettingsTab?.gameObject, false);
+                    }
+                    break;
+            }
+
+            // ④ 遮罩：左边亮、右边暗（照 TONE）
+            __instance.ToggleLeftSideDarkener(true);
+            __instance.ToggleRightSideDarkener(false);
+
+            // ⑤ 我们自己的内容与图标状态
+            ShowTabConfig(tabNum);
+            RefreshAllTabIcons();
+            RefreshTabSelection();
+
+            return false;   // ⚠️ 关键：原版 ChangeTab 不执行
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.ChangeTabPrefix]", ex);
+            return true;    // 出错就交回原版，至少不把界面搞死
+        }
+    }
+
+    /// <summary>SetActive 的安全封装（null 不抛）。</summary>
+    private static void SetActiveSafe(GameObject? go, bool active)
+    {
+        try
+        {
+            if (go != null && go.activeSelf != active) go.SetActive(active);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 原版"游戏设置"页第一次打开时要铺一次行
+    /// （克隆体不会自动跑，原版那次 Initialize 我们要主动补）。
+    /// </summary>
+    private static void RefreshVanillaGameSettings(GameSettingMenu menu)
+    {
+        try
+        {
+            var tab = menu.GameSettingsTab;
+            if (tab == null) return;
+
+            var children = tab.Children;
+            if (children == null || children.Count == 0)
+            {
+                tab.CreateSettings();
+                LightLogger.Log("[GameSettingMenuPatch] 已为原版游戏设置页补铺一次行");
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.RefreshVanillaGameSettings] {ex.Message}");
+        }
+    }
+
+    /// <summary>每个 MOD 类页签对应的克隆 GameOptionsMenu（下标同 VanillaTabs）。</summary>
+    private static readonly GameOptionsMenu?[] _tabMenus = new GameOptionsMenu?[8];
+
+    /// <summary>
+    /// 为 6 个 MOD 类页签各克隆一个 GameOptionsMenu（挂在原版 GameSettingsTab 的父级下）。
+    /// 克隆体默认隐藏，切页签时只激活一个。
+    /// </summary>
+    private static void CreateTabMenus(GameSettingMenu menu)
+    {
+        try
+        {
+            var source = menu.GameSettingsTab;
+            if (source == null)
+            {
+                LightLogger.LogWarning("[GameSettingMenuPatch] GameSettingsTab 为 null，无法克隆页签菜单");
+                return;
+            }
+
+            var parent = source.transform.parent;
+            int made = 0;
+
+            for (int i = 0; i < VanillaTabs.Length; i++)
+            {
+                // 预设 / 游戏设置用原版页，不克隆
+                if (i == TabPreset || i == TabGameSettings) continue;
+
+                var clone = Object.Instantiate(source, parent);
+                clone.gameObject.name = $"LightTabMenu_{VanillaTabs[i].Key}";
+                clone.gameObject.SetActive(false);
+
+                // ⚠️ 登记为"我们的菜单"：OpenMenu/CloseMenu 会被拦掉，
+                //    否则 SetActive 切换会经 OnDisable/OnEnable 触发
+                //    ControllerManager 递归 → 栈溢出。
+                Light.UI.Config.ConfigRowPatches.RegisterOurMenu(clone);
+
+                _tabMenus[i] = clone;
+                made++;
+            }
+
+            LightLogger.Log($"[GameSettingMenuPatch] 已为 {made} 个 MOD 页签克隆 GameOptionsMenu");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.CreateTabMenus]", ex);
+        }
+    }
+
+    /// <summary>
+    /// 激活某个 MOD 页签的克隆菜单，其余全部关闭（照 TONE 的 ChangeTab 逻辑）。
+    /// 返回被激活的 menu（供配置面板登记为宿主）。
+    /// </summary>
+    private static GameOptionsMenu? ActivateTabMenu(int index)
+    {
+        try
+        {
+            // 先全关
+            for (int i = 0; i < _tabMenus.Length; i++)
+            {
+                var m = _tabMenus[i];
+                if (m != null && m.gameObject.activeSelf) m.gameObject.SetActive(false);
+            }
+
+            if (index == TabPreset || index == TabGameSettings) return null;
+
+            var target = index < _tabMenus.Length ? _tabMenus[index] : null;
+            if (target == null) return null;
+
+            // 打开前先把旧行清掉，让原版 CreateSettings 重新铺
+            Light.UI.Config.ConfigUIPanel.ClearRowsOnly();
+
+            target.gameObject.SetActive(true);
+            LightLogger.Log($"[GameSettingMenuPatch] 已激活页签菜单 {target.name}");
+            return target;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.ActivateTabMenu]", ex);
+            return null;
+        }
+    }
+
+    /// <summary>给页签按钮创建一个图标位（TONE 星星的位置），并登记以便切状态。</summary>
+    private static void CreateTabIcon(PassiveButton btn, int index)
+    {
+        try
+        {
+            var go = NewUIObject($"LightTabIcon_{VanillaTabs[index].Key}", btn.transform,
+                new Vector3(TabIconOffsetX, 0f, -0.1f));
+
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = _tabIconNormal[index];       // 可能为 null（美术还没画）→ 空槽，不崩
+            sr.drawMode = SpriteDrawMode.Sliced;
+            sr.size = TabIconSize;
+            sr.color = sr.sprite != null ? UColor.white : new UColor(1f, 1f, 1f, 0f);  // 无图时全透明
+
+            _tabIcons[index] = new TabIcon { Renderer = sr, Go = go };
+            ApplyTabIconState(index, selected: index == _currentTab, hover: false);
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.CreateTabIcon] {ex.Message}");
+        }
+    }
+
+    /// <summary>页签图标的运行时引用。</summary>
+    private class TabIcon
+    {
+        public SpriteRenderer? Renderer;
+        public GameObject? Go;
+    }
+
+    private static readonly TabIcon?[] _tabIcons = new TabIcon?[8];
+
+    /// <summary>
+    /// 设置某个页签图标的视觉状态。
+    /// 选中 → 选中图 + 放大；仅悬浮 → **未选中图** + 放大；都没有 → 未选中图 + 原始大小。
+    ///
+    /// ⚠️ 尺寸直接赋**绝对缩放**（不是 localScale *= ），所以反复点击/悬浮**不会累积变大**。
+    /// </summary>
+    private static void ApplyTabIconState(int index, bool selected, bool hover)
+    {
+        var icon = index >= 0 && index < _tabIcons.Length ? _tabIcons[index] : null;
+        if (icon?.Renderer == null) return;
+
+        var sprite = (selected ? _tabIconSelected[index] : _tabIconNormal[index])
+                     ?? _tabIconNormal[index];      // 选中图缺失时退回未选中图
+        if (sprite != null)
+        {
+            icon.Renderer.sprite = sprite;
+            icon.Renderer.color = UColor.white;
+        }
+
+        // 绝对缩放：悬浮或选中都放大，否则原始大小。绝不累乘。
+        float s = (selected || hover) ? TabIconHoverScale : 1f;
+        if (icon.Go != null) icon.Go.transform.localScale = new Vector3(s, s, 1f);
+    }
+
+    private static void SetTabIconState(int index, bool hover)
+    {
+        bool selected = index == _currentTab;
+        ApplyTabIconState(index, selected, hover);
+    }
+
+    /// <summary>刷新所有页签图标的选中态。</summary>
+    private static void RefreshAllTabIcons()
+    {
+        for (int i = 0; i < VanillaTabs.Length; i++)
+            ApplyTabIconState(i, selected: i == _currentTab, hover: false);
+    }
+
+    /// <summary>
+    /// 点击页签：统一走 <c>GameSettingMenu.ChangeTab</c>。
+    ///
+    /// 注意 ChangeTab 已被我们的 Prefix 接管（return false），
+    /// 所以这里调它 = 走我们自己的切换逻辑，**不会**碰 ControllerManager，
+    /// 也就不会有递归/栈溢出。
+    /// </summary>
+    private static void OnVanillaTabClicked(int index)
+    {
+        try
+        {
+            _currentTab = index;
+            RefreshAllTabIcons();
+            RefreshTabSelection();
+
+            var menu = GameSettingMenu.Instance;
+            if (menu == null)
+            {
+                ShowTabConfig(index);
+                return;
+            }
+
+            // 预设 / 游戏设置：让原版页签显示
+            // MOD 类：tabNum 直接用我们的下标（ChangeTabPrefix 里按同一套下标分发）
+            menu.ChangeTab(index, false);
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.OnVanillaTabClicked]", ex);
+        }
+    }
+
+    /// <summary>
+    /// 切换 MOD 类页签的内容：
+    ///  - 有对应分类的配置块 → 平铺渲染（调试项在 MOD 页）
+    ///  - 没有 → 占位「XX页签暂未实现。」
+    /// 职业页签按要求固定显示未实现。
     /// </summary>
     private static void ShowTabConfig(int index)
     {
         if (_modPage == null) return;
         _currentTab = index;
-        SetTabButtonsVisible(true);   // 从职业配置页切回来时恢复标签行
-
-        var cats = ModTabCategories[index];
-        var roleBlocks = new List<ConfigBlock>();
-        bool hasOther = false;
-        foreach (var block in ConfigRegistry.Blocks)
-        {
-            if (!MatchesCats(block, cats)) continue;
-            if (block.Key.StartsWith("lid.role.")) roleBlocks.Add(block);
-            else hasOther = true;
-        }
 
         if (_modPlaceholderText != null) _modPlaceholderText.text = "";
 
-        if (roleBlocks.Count > 0)
-        {
-            // 职业列表页（覆盖配置面板）
-            Light.UI.Config.ConfigUIPanel.Clear();
-            Light.UI.Config.RoleListPage.Show(roleBlocks, _modPage.transform, OnRoleSelected);
-        }
-        else if (hasOther)
+        // 预设/游戏设置是原版页 —— ⚠️ 必须把我们自己的页面**关掉**再返回。
+        // 之前这里直接 return 而没关 _modPage，导致切到预设页时
+        // 我们的内容仍挂在上面（用户反馈"预设的四个文字也过来了"）。
+        if (index == TabPreset || index == TabGameSettings)
         {
             Light.UI.Config.RoleListPage.Clear();
-            Light.UI.Config.ConfigUIPanel.Show(cats, _modPage.transform);
+            Light.UI.Config.ConfigUIPanel.Clear();
+            SetActiveSafe(_modPage, false);
+
+            // 原版内容不需要我们的宿主
+            Light.UI.Config.ConfigUIPanel.SetHostMenu(null);
+            return;
+        }
+
+        SetActiveSafe(_modPage, true);
+
+        // 取该页签对应的配置分类
+        var cats = CategoriesForTab(index);
+
+        bool hasOther = false;
+        if (cats != null)
+        {
+            foreach (var block in ConfigRegistry.Blocks)
+            {
+                if (!MatchesCats(block, cats)) continue;
+                if (block.Key.StartsWith("lid.role.")) continue;   // 职业块不参与本轮渲染
+                hasOther = true;
+                break;
+            }
+        }
+
+        if (hasOther)
+        {
+            Light.UI.Config.RoleListPage.Clear();
+
+            // ⚠️ 配置行要铺进**克隆出来的真 GameOptionsMenu** 的 settingsContainer。
+            // 宿主已由 OnVanillaTabClicked 通过 ActivateTabMenu 登记好了。
+            Light.UI.Config.ConfigUIPanel.Show(cats!, _modPage.transform);
         }
         else
         {
             Light.UI.Config.RoleListPage.Clear();
             Light.UI.Config.ConfigUIPanel.Clear();
             if (_modPlaceholderText != null)
-                _modPlaceholderText.text = $"{ModTabs[index].Cn}页签暂未实现。";
+                _modPlaceholderText.text = $"{VanillaTabs[index].Cn}页签暂未实现。";
+        }
+    }
+
+    /// <summary>
+    /// 把"MOD 设置"页签背后的那个 GameOptionsMenu 登记给配置面板当宿主。
+    /// 它就是原版职业设置页里的 <c>GameOptionsMenu</c>（含 settingsContainer / 滚动条 / 各模板预制体）。
+    /// </summary>
+    private static void RegisterHostMenu()
+    {
+        try
+        {
+            var host = _modPage != null
+                ? _modPage.GetComponentInParent<GameOptionsMenu>(true)
+                : null;
+
+            if (host == null)
+            {
+                // 退一步：从整个菜单里找（职业设置页那个）
+                var menu = GameSettingMenu.Instance;
+                if (menu != null)
+                    host = menu.GetComponentInChildren<GameOptionsMenu>(true);
+            }
+
+            Light.UI.Config.ConfigUIPanel.SetHostMenu(host);
+            LightLogger.Log(host != null
+                ? $"[GameSettingMenuPatch] 宿主 GameOptionsMenu 已登记：{host.name}"
+                : "[GameSettingMenuPatch] 未找到宿主 GameOptionsMenu（将退回自建容器）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.RegisterHostMenu] {ex.Message}");
+        }
+    }
+
+    /// <summary>某页签对应的配置分类（预设/游戏设置返回 null）。</summary>
+    private static ConfigCategory[]? CategoriesForTab(int index)
+    {
+        switch (index)
+        {
+            case TabMod:      return new[] { ConfigCategory.Mod, ConfigCategory.Debug };
+            case TabGhost:    return new[] { ConfigCategory.Ghost };
+            case TabCrewmate: return new[] { ConfigCategory.Crewmate };
+            case TabImpostor: return new[] { ConfigCategory.Impostor };
+            case TabNeutral:  return new[] { ConfigCategory.Neutral };
+            case TabModifier: return new[] { ConfigCategory.Modifier };
+            default:          return null;
         }
     }
 
@@ -542,15 +1251,15 @@ public static class GameSettingMenuPatch
         return false;
     }
 
-    /// <summary>点击职业按钮：隐藏标签行，打开该职业的独立配置页（带返回按钮）。</summary>
+    /// <summary>点击职业按钮：隐藏页签行，打开该职业的独立配置页（带返回按钮）。</summary>
     private static void OnRoleSelected(ConfigBlock block)
     {
         Light.UI.Config.RoleListPage.Clear();
         SetTabButtonsVisible(false);
-        Light.UI.Config.ConfigUIPanel.ShowRole(block, _modPage.transform, OnRolePageBack);
+        Light.UI.Config.ConfigUIPanel.ShowRole(block, _modPage!.transform, OnRolePageBack);
     }
 
-    /// <summary>职业配置页点返回：恢复标签行，回到职业列表。</summary>
+    /// <summary>职业配置页点返回：恢复页签行，回到职业列表。</summary>
     private static void OnRolePageBack()
     {
         Light.UI.Config.ConfigUIPanel.Clear();
@@ -558,7 +1267,7 @@ public static class GameSettingMenuPatch
         ShowTabConfig(_currentTab);
     }
 
-    /// <summary>显示/隐藏 6 个分类标签按钮。</summary>
+    /// <summary>显示/隐藏 8 个页签按钮。</summary>
     private static void SetTabButtonsVisible(bool visible)
     {
         foreach (var btn in _tabButtons)

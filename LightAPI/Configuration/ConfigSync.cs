@@ -252,12 +252,27 @@ namespace LightInDark.Configuration
             }
         }
 
-        /// <summary>把某个配置项的值广播出去（供 UI 调用）。</summary>
+        /// <summary>
+        /// 把某个配置项的值广播出去。
+        ///
+        /// ⚠️ 【栈溢出根因，已修】这里**绝对不能**再调 <c>item.Raise()</c>。
+        ///
+        /// 原来的实现是：
+        ///     item.Raise();          // → 触发 OnChanged
+        ///     NotifyChanged(item);
+        /// 而调用方自己是这么注册的：
+        ///     Enabled.OnChanged += item => ConfigSync.RaiseAndSync(item);
+        /// 于是形成闭环：
+        ///     OnChanged → RaiseAndSync → Raise → OnChanged → ...
+        /// 实测递归 4958 次后栈溢出（DebugConfig.<Register>b__15_0 → Raise → RaiseAndSync）。
+        ///
+        /// 语义上这里本来就**不该**再 Raise：本方法是"值已经改好了，去通知别人"，
+        /// 而不是"请再通知我一次"。所以只做同步/广播，不再回调 OnChanged。
+        /// </summary>
         public static void RaiseAndSync(ConfigItem item)
         {
             if (item == null) return;
-            item.Raise();
-            NotifyChanged(item);
+            NotifyChanged(item);   // 只广播，不再 Raise（Raise 会回调订阅者 → 递归）
         }
     }
 

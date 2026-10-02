@@ -79,30 +79,42 @@ namespace LightInDark.Configuration
 
         // -----------------------------------------------------------------
         //  AddConfiguration<T> —— 具名工厂，避免 bool/int 重载靠隐式转换区分
+        //
+        //  【Nebula 风格的可选可见性谓词】
+        //  Nebula 的配置注册允许传一个 `Func<bool>? predicate` 决定该项是否显示
+        //  （NebulaAPI\Configuration\ConfigurationVariations.cs:96-98 的 SetPredicate）。
+        //  这里给每个重载都加了末尾可选的 `visibleWhen`，语义一致：
+        //     · 传 null（默认）→ 一直显示；
+        //     · 传一个 lambda → 每次值变化都会重新求值（见 ConfigUIPanel.Refresh，
+        //       它按注册表全量对比 "应显示 / 已建出"，所以勾选后**立即**出现，不用重开菜单）。
+        //  例：block.AddConfiguration("x.count", 0, 0, 14, 1, "数量", null, () => Enabled.GetBool())
+        //  也可以后续链式写 .SetVisibleWhen(() => ...) 或 .SetDependsOn(另一项)。
         // -----------------------------------------------------------------
 
         /// <summary>注册一个勾选框配置项。</summary>
-        public ConfigItem AddConfiguration(string key, bool defaultValue, string displayName = null, string detail = null)
-            => Add(ConfigItem.CreateBool(key, defaultValue, displayName, detail, this));
+        public ConfigItem AddConfiguration(string key, bool defaultValue, string displayName = null, string detail = null,
+            Func<bool> visibleWhen = null)
+            => Add(ConfigItem.CreateBool(key, defaultValue, displayName, detail, this).SetVisibleWhen(visibleWhen));
 
         /// <summary>注册一个整数配置项（含范围与步进，值会被 clamp）。</summary>
         public ConfigItem AddConfiguration(string key, int defaultValue, int min, int max, int step = 1,
-            string displayName = null, string detail = null)
-            => Add(ConfigItem.CreateInt(key, defaultValue, min, max, step, displayName, detail, this));
+            string displayName = null, string detail = null, Func<bool> visibleWhen = null)
+            => Add(ConfigItem.CreateInt(key, defaultValue, min, max, step, displayName, detail, this).SetVisibleWhen(visibleWhen));
 
         /// <summary>注册一个浮点配置项（含范围与步进，值会被 clamp）。</summary>
         public ConfigItem AddConfiguration(string key, float defaultValue, float min, float max, float step,
-            string displayName = null, string detail = null)
-            => Add(ConfigItem.CreateFloat(key, defaultValue, min, max, step, displayName, detail, this));
+            string displayName = null, string detail = null, Func<bool> visibleWhen = null)
+            => Add(ConfigItem.CreateFloat(key, defaultValue, min, max, step, displayName, detail, this).SetVisibleWhen(visibleWhen));
 
         /// <summary>注册一个枚举/预设值配置项。候选表首项为默认值。</summary>
-        public ConfigItem AddConfiguration(string key, string[] selections, string displayName = null, string detail = null)
-            => Add(ConfigItem.CreateValue(key, selections, displayName, detail, this));
+        public ConfigItem AddConfiguration(string key, string[] selections, string displayName = null, string detail = null,
+            Func<bool> visibleWhen = null)
+            => Add(ConfigItem.CreateValue(key, selections, displayName, detail, this).SetVisibleWhen(visibleWhen));
 
         /// <summary>注册一个 Filter 配置项（从游戏已有池子取值，本轮与 Value 同实现）。</summary>
         public ConfigItem AddFilter(string key, IReadOnlyList<ConfigFilterOption> pool,
-            string displayName = null, string detail = null)
-            => Add(ConfigItem.CreateFilter(key, pool, displayName, detail, this));
+            string displayName = null, string detail = null, Func<bool> visibleWhen = null)
+            => Add(ConfigItem.CreateFilter(key, pool, displayName, detail, this).SetVisibleWhen(visibleWhen));
 
         private ConfigItem Add(ConfigItem item)
         {
