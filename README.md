@@ -2,10 +2,10 @@
 ![Mod Title](./Image/LightInDark.png)
 
 <p align="center">
-<a href="https://github.com/AfishMW/LightInDark/releases/"><img src="https://img.shields.io/github/v/release/AfishMW/LightInDark"></a>    
-<a href="https://github.com/AfishMW/LightInDark/releases/"><img src="https://img.shields.io/github/downloads/AfishMW/LightInDark/total"></a>    
-<a href="https://github.com/AfishMW/LightInDark/releases/"><img src="https://img.shields.io/github/downloads/AfishMW/LightInDark/latest/total"></a>
-<a href="https://github.com/AfishMW/LightInDark/releases/"><img src="https://img.shields.io/github/stars/AfishMW/LightInDark"></a>
+<a href="https://github.com/Moon-Scar-Studio/LightInDark/releases/"><img src="https://img.shields.io/github/v/release/Moon-Scar-Studio/LightInDark"></a>    
+<a href="https://github.com/Moon-Scar-Studio/LightInDark/releases/"><img src="https://img.shields.io/github/downloads/Moon-Scar-Studio/LightInDark/total"></a>    
+<a href="https://github.com/Moon-Scar-Studio/LightInDark/releases/"><img src="https://img.shields.io/github/downloads/Moon-Scar-Studio/LightInDark/latest/total"></a>
+<a href="https://github.com/Moon-Scar-Studio/LightInDark/releases/"><img src="https://img.shields.io/github/stars/Moon-Scar-Studio/LightInDark"></a>
 </p>
 
 <p align="center">本模组与Among Us或Innersloth LLC均无关联，其内容亦未获得Innersloth LLC的认可或赞助。本模组包含的部分素材归Innersloth LLC所有© Innersloth LLC</p>  
@@ -72,5 +72,5 @@ SPDX-License-Identifier: GPL-3.0-only
 
 你可以自由使用、修改和分发本项目，但分发修改版或二进制版时，必须保留版权声明与许可证，并提供对应的完整源代码。
 
-> 注意：Among Us、Innersloth LLC 的素材、第三方项目代码/素材、画师作品等不适用本项目的 GPL 授权，其版权与许可归各自权利人所有。详见 [NOTICE](./NOTICE) 或 [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md)。
+> 注意：Among Us、Innersloth LLC 的素材、第三方项目代码/素材、画师作品等不适用本项目的 GPL 授权，其版权与许可归各自权利人所有。
 
