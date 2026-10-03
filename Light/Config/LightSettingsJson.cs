@@ -47,6 +47,12 @@ public static class LightSettings
         /// 握手失败处理：0=仅提示 1=踢出该玩家（按房主的配置生效）
         /// </summary>
         public int HandshakeMode { get; set; } = 0;
+        /// <summary>
+        /// 启动时自动检查模组更新。
+        /// 关掉之后加载页不再请求 version.json（也就不会显示新版本金字）；
+        /// 主界面「检查更新」按钮仍然可以手动跑。
+        /// </summary>
+        public bool AutoCheckUpdate { get; set; } = true;
     }
     public static LightSettingsData LoadSettingData()
     {

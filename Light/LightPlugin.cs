@@ -30,7 +30,7 @@ public partial class LightPlugin : BasePlugin
 {
     public const string Id = "com.moonscar.lightindark";
     public const string Name = "LightInTheDark";
-    public const string Version = "1.0.0";
+    public const string Version = "0.0.1";
 
     public const string VisualVersion = "v1.0.0";
 

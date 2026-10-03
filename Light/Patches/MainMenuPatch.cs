@@ -297,11 +297,16 @@ public static class MainMenuPatch
         yield return null;
         try
         {
-            string updaterPath = Path.Combine(BepInEx.Paths.GameRootPath, VersionMaker.UpdaterExeName);
+            // ⚠️ 更新器统一放在 <游戏根目录>\Light_Data\Tools（见 LightToolManager），
+            //    不再是游戏根目录。正常启动时加载页会把缺失的那个自动下载下来。
+            string updaterPath = VersionMaker.UpdaterExePath;
             if (!File.Exists(updaterPath))
             {
-                LightLogger.LogWarning($"未找到更新脚本：{VersionMaker.UpdaterExeName}");
-                LightUtils.ShowCustomDisconnectWindow($"未找到更新脚本 {VersionMaker.UpdaterExeName}！\n请将其放置在游戏根目录下，否则无法正常检查更新。");
+                LightLogger.LogWarning($"未找到更新脚本：{updaterPath}");
+                LightUtils.ShowCustomDisconnectWindow(
+                    $"未找到更新脚本 {VersionMaker.UpdaterExeName}！\n" +
+                    $"请确认它位于：\n{Light.Tools.LightToolManager.ToolsDir}\n" +
+                    "（正常启动游戏时加载页会自动下载它）");
             }
         }
         catch { }
@@ -1301,7 +1306,7 @@ public static class MainMenuPatch
                 LightUtils.ShowCustomDisconnectWindow("更新检查失败。\n请将游戏目录下的Light.log发送给开发者或者QQ群中。\n不要直接将此界面截图/拍照给其他人。");
                 break;
             case "path error":
-                LightUtils.ShowCustomDisconnectWindow($"未找到更新检查器！请检查你的目录下有无 {VersionMaker.UpdaterExeName} 。");
+                LightUtils.ShowCustomDisconnectWindow($"未找到更新检查器！\n请检查这个路径下有没有 {VersionMaker.UpdaterExeName} ：\n{VersionMaker.UpdaterExePath}");
                 break;
             case "github error":
                 LightUtils.ShowCustomDisconnectWindow("无法访问GitHub来检查版本！请检查您的网络状况。\n当然，最坏的结果是我们删仓跑路了。");
