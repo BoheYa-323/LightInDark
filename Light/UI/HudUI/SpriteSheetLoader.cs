@@ -23,8 +23,8 @@ public static class SpriteSheetLoader
         {
             var tex = LoadTexture(resourcePath);
             if (tex == null) return null!;
-            return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height),
-                new Vector2(0.5f, 0.5f), pixelsPerUnit);
+            return Keep(Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height),
+                new Vector2(0.5f, 0.5f), pixelsPerUnit));
         }
         catch (Exception ex)
         {
@@ -85,7 +85,7 @@ public static class SpriteSheetLoader
                         new Vector2(0.5f, 0.5f), pixelsPerUnit,
                         0, SpriteMeshType.FullRect, border);
 
-                    sprites[row * cols + col] = sprite;
+                    sprites[row * cols + col] = Keep(sprite);
                 }
             }
 
@@ -112,9 +112,9 @@ public static class SpriteSheetLoader
             var rect = new Rect(0, 0, tex.width, tex.height);
             Vector4 border = new(borderLeft, borderBottom, borderRight, borderTop);
 
-            return Sprite.Create(tex, rect,
+            return Keep(Sprite.Create(tex, rect,
                 new Vector2(0.5f, 0.5f), pixelsPerUnit,
-                0, SpriteMeshType.FullRect, border);
+                0, SpriteMeshType.FullRect, border));
         }
         catch (Exception ex)
         {
@@ -144,12 +144,50 @@ public static class SpriteSheetLoader
                 return null!;
             }
             tex.wrapMode = TextureWrapMode.Clamp;
-            return tex;
+            return Keep(tex);
         }
         catch (Exception ex)
         {
             LightLogger.LogError("[SpriteSheetLoader.LoadTexture]", ex); return default;
         }
+    }
+
+    // =====================================================================
+    //  ⚠️⚠️ 运行期造出来的 Texture / Sprite 必须打 DontUnloadUnusedAsset
+    // =====================================================================
+    //
+    //  【这是"重载场景后按钮贴图消失、但还能按"的**真正根因**】
+    //
+    //  `new Texture2D(...)` + `Sprite.Create(...)` 造出来的是**运行期对象**。
+    //  场景加载时 Unity 会跑一次 `Resources.UnloadUnusedAssets()`，
+    //  **在 IL2CPP 下它不认托管侧的静态引用**（`_cache` / `_buttonSprites` 这些），
+    //  于是这些 Sprite 被当成"没人用"直接回收 → 变成 Unity 的"假 null"。
+    //
+    //  后果：赋给 `SpriteRenderer.sprite` 之后**什么都不画**，
+    //  但碰撞盒是独立的对象、还在 → 表现为"贴图没了，但原来的位置还能按"。
+    //
+    //  实测对应的就是：关闭按钮（CloseButtonSprites）、
+    //  点「应用」弹出来的框（Inner/Frame）、面板里的分隔线与边框。
+    //  （`GradientButton` 的按钮图因为一开始就打了这个标记，所以一直没出问题 —— 反证。）
+    //
+    //  → 所有从嵌入资源加载的贴图与切出来的 Sprite，一律打标记，从此不再被回收。
+    private static Texture2D Keep(Texture2D tex)
+    {
+        try { if (tex != null) tex.hideFlags |= HideFlags.DontUnloadUnusedAsset; } catch { }
+        return tex;
+    }
+
+    public static Sprite Keep(Sprite spr)
+    {
+        try
+        {
+            if (spr == null) return spr;
+            spr.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+            var tex = spr.texture;
+            if (tex != null) tex.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+        }
+        catch { }
+        return spr;
     }
 }
 
@@ -158,6 +196,26 @@ public static class SpriteSheetLoader
 /// </summary>
 public static class HudUIAssets
 {
+    /// <summary>
+    /// 缓存是否**真的**还有效。
+    ///
+    /// ⚠️⚠️ 光判 `_sprites != null` 是不够的：数组本身是托管对象不会死，
+    ///    但**里面的 Sprite 会**（场景卸载 / UnloadUnusedAssets 之后变成 Unity 假 null）。
+    ///    原版代码只判了数组，于是重载场景后拿到一堆已销毁的 Sprite，
+    ///    赋给 SpriteRenderer 什么都不画 —— 用户报的"按钮贴图消失、但还能按"。
+    ///    这里逐个元素用 Unity 的 == 判活，有一个死了就整体重新加载。
+    /// </summary>
+    private static bool Alive(Sprite[]? arr)
+    {
+        try
+        {
+            if (arr == null || arr.Length == 0) return false;
+            foreach (var s in arr) if (s == null) return false;
+            return true;
+        }
+        catch { return false; }
+    }
+
     // GUI/Button.png — 3列×2行，12px 边框
     // [0]=normal [1]=hover [2]=unused
     // [3]=selected [4]=selected+hover [5]=unused
@@ -168,7 +226,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_buttonSprites != null) return _buttonSprites;
+                if (Alive(_buttonSprites)) return _buttonSprites!;
                 _buttonSprites = SpriteSheetLoader.LoadDivided(
                     "Light.Resources.GUI.SettingGUI.Button.png", 150f, 3, 2, 12, 12, 12, 12);
                 return _buttonSprites!;
@@ -193,7 +251,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_checkmarkSprites != null) return _checkmarkSprites;
+                if (Alive(_checkmarkSprites)) return _checkmarkSprites!;
                 _checkmarkSprites = SpriteSheetLoader.LoadDivided(
                     "Light.Resources.GUI.SettingGUI.Checkmark.png", 150f, 2, 1, 0, 0, 0, 0);
                 return _checkmarkSprites!;
@@ -215,7 +273,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_closeButtonSprites != null) return _closeButtonSprites;
+                if (Alive(_closeButtonSprites)) return _closeButtonSprites!;
                 _closeButtonSprites = SpriteSheetLoader.LoadDivided(
                     "Light.Resources.GUI.SettingGUI.CloseButton.png", 150f, 2, 1, 0, 0, 0, 0);
                 return _closeButtonSprites!;
@@ -237,7 +295,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_navButtonSprites != null) return _navButtonSprites;
+                if (Alive(_navButtonSprites)) return _navButtonSprites!;
                 _navButtonSprites = SpriteSheetLoader.LoadDivided(
                     "Light.Resources.GUI.SettingGUI.NavButton.png", 150f, 2, 2, 0, 0, 0, 0);
                 return _navButtonSprites!;
@@ -261,7 +319,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_frameSprite != null) return _frameSprite;
+                if (_frameSprite != null) return _frameSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _frameSprite = SpriteSheetLoader.LoadSliced(
                     "Light.Resources.GUI.SettingGUI.Background_Frame.png", 100f, 12, 12, 12, 12);
                 return _frameSprite;
@@ -281,7 +339,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_innerSprite != null) return _innerSprite;
+                if (_innerSprite != null) return _innerSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _innerSprite = SpriteSheetLoader.LoadSliced(
                     "Light.Resources.GUI.SettingGUI.Background_Inner.png", 100f, 8, 8, 8, 8);
                 return _innerSprite;
@@ -303,7 +361,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_settingFrameSprite != null) return _settingFrameSprite;
+                if (_settingFrameSprite != null) return _settingFrameSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _settingFrameSprite = SpriteSheetLoader.LoadSliced(
                     "Light.Resources.GUI.SettingGUI.Background_Frame.png", 100f, 12, 12, 12, 12);
                 return _settingFrameSprite;
@@ -322,7 +380,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_settingInnerSprite != null) return _settingInnerSprite;
+                if (_settingInnerSprite != null) return _settingInnerSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _settingInnerSprite = SpriteSheetLoader.LoadSliced(
                     "Light.Resources.GUI.SettingGUI.Background_Inner.png", 100f, 8, 8, 8, 8);
                 return _settingInnerSprite;
@@ -341,7 +399,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_settingCloseSprites != null) return _settingCloseSprites;
+                if (Alive(_settingCloseSprites)) return _settingCloseSprites!;
                 _settingCloseSprites = SpriteSheetLoader.LoadDivided(
                     "Light.Resources.GUI.SettingGUI.CloseButton.png", 150f, 2, 1, 0, 0, 0, 0);
                 return _settingCloseSprites!;
@@ -362,7 +420,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_colorButtonSprite != null) return _colorButtonSprite;
+                if (_colorButtonSprite != null) return _colorButtonSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _colorButtonSprite = SpriteSheetLoader.LoadSliced(
                     "Light.Resources.GUI.ColorButton.png", 100f, 4, 4, 4, 4);
                 return _colorButtonSprite;
@@ -382,7 +440,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_colorButtonSelectedSprite != null) return _colorButtonSelectedSprite;
+                if (_colorButtonSelectedSprite != null) return _colorButtonSelectedSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _colorButtonSelectedSprite = SpriteSheetLoader.LoadSliced(
                     "Light.Resources.GUI.ColorButtonSelected.png", 100f, 4, 4, 4, 4);
                 return _colorButtonSelectedSprite;
@@ -402,7 +460,7 @@ public static class HudUIAssets
         {
             try
             {
-                if (_whiteSprite != null) return _whiteSprite;
+                if (_whiteSprite != null) return _whiteSprite;   // Unity 的 == 能识别假 null；死了就走下面重新加载
                 _whiteSprite = SpriteSheetLoader.Load(
                     "Light.Resources.GUI.ColorFullBase.png", 100f);
                 return _whiteSprite;

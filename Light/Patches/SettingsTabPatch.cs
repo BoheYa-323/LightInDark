@@ -619,6 +619,12 @@ internal static class DetailPopupDriverPatch
     public static void UpdatePostfix()
     {
         DetailPopup.Update();
+
+        // 补做"因时机不对而推迟"的解 Tag 请求。
+        // （Deserialize 的 postfix 触发时 GameOptionsManager 还没就绪，硬读会抛 NRE ——
+        //   所以那时只记一笔，等这里每帧轮到就绪后再做一次。见 ConfigSync.OptionsReady。）
+        try { LightInDark.Configuration.ConfigSync.TickPendingApply(); }
+        catch { /* 补做失败不影响正常流程 */ }
     }
 }
 

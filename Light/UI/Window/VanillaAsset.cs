@@ -35,11 +35,21 @@ public static class VanillaAsset
     private static bool _triedInit;
 
     /// <summary>弹窗背景 Sprite</summary>
-    public static Sprite PopUpBackSprite => TryGetSprite(ref _popUpBackSprite);
+    public static Sprite PopUpBackSprite => TryGetSprite(ref _popUpBackSprite, FallbackPanelSprite);
     /// <summary>按钮背景 Sprite</summary>
-    public static Sprite TextButtonSprite => TryGetSprite(ref _textButtonSprite);
+    public static Sprite TextButtonSprite => TryGetSprite(ref _textButtonSprite, FallbackPanelSprite);
     /// <summary>全屏遮罩 Sprite</summary>
-    public static Sprite FullScreenSprite => TryGetSprite(ref _fullScreenSprite);
+    /// <summary>
+    /// 铺满全屏用的纯色 Sprite。
+    ///
+    /// ⚠️ **故意不返回原版那张**：它来自主菜单场景的弹窗预制体，
+    ///    场景一卸载就可能被回收成"假 null"（IL2CPP 下 UnloadUnusedAssets
+    ///    不认托管静态引用），结果所有用它的东西——分隔线、边框、黑幕——集体消失，
+    ///    但碰撞盒还在 → "能按但没图"。
+    ///    它的用途只是"一块纯色填充"（各处都配 drawMode = Sliced + size 拉伸），
+    ///    所以换成我们自己造的 1×1 白图**视觉上等价**，而且永远死不了。
+    /// </summary>
+    public static Sprite FullScreenSprite => WhiteSprite;
     /// <summary>关闭按钮 Sprite</summary>
     public static Sprite CloseButtonSprite => TryGetSprite(ref _closeButtonSprite);
 
@@ -129,16 +139,20 @@ public static class VanillaAsset
     }
 
     private static Sprite? _whiteSprite;
-    /// <summary>白色降级 Sprite</summary>
+    /// <summary>白色降级 Sprite（程序生成，永不销毁 —— 它是所有兜底的最后一环）</summary>
     public static Sprite WhiteSprite
     {
         get
         {
             try
             {
+                // ⚠️ 用 Unity 的 == null（走重载），不要用 ??
                 if (_whiteSprite != null) return _whiteSprite;
+
                 var tex = Texture2D.whiteTexture;
                 _whiteSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                // 兜底图必须活到最后，否则连它都没了 UI 就彻底空白
+                try { _whiteSprite.hideFlags |= HideFlags.DontUnloadUnusedAsset; } catch { }
                 return _whiteSprite;
             }
             catch (Exception ex)
@@ -148,12 +162,124 @@ public static class VanillaAsset
         }
     }
 
+    /// <summary>
+    /// 给从原版抓来的资源打上"别被卸载"标记。
+    ///
+    /// ⚠️⚠️ 这是"重载场景后按钮贴图消失"的**根治点**：
+    ///   原来这几个 Sprite 是**裸引用**原版资源的，场景一卸载就被销毁成 Unity 的"假 null"，
+    ///   而 SpriteRenderer 拿到它什么都不画（碰撞盒还在 → 表现为"能按但没图"）。
+    ///   打上 DontUnloadUnusedAsset 之后它们就再也不会被卸载。
+    /// </summary>
+    private static Sprite? Keep(Sprite? s)
+    {
+        try
+        {
+            if (s == null) return s;
+            s.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+            var tex = s.texture;
+            if (tex != null) tex.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+        }
+        catch { }
+        return s;
+    }
+
+    /// <summary>从原版抓来的那几个 Sprite 是否都还活着（Unity 语义下）。</summary>
+    private static bool VanillaSpritesAlive()
+        => _fullScreenSprite != null && _textButtonSprite != null && _popUpBackSprite != null;
+
+    /// <summary>
+    /// 自绘的圆角面板九宫格（深灰底 + 略亮描边）。
+    ///
+    /// 用途：`PopUpBackSprite` 的**兜底**。
+    /// 原版那张来自主菜单场景的弹窗预制体，场景卸载后可能被回收成"假 null"
+    /// （IL2CPP 下 UnloadUnusedAssets 不认托管静态引用）→ 窗口底就没了。
+    /// 退化成"一块纯白方片"太丑，所以自绘一个圆角的，视觉上接近原版弹窗底。
+    /// 自己造的 + DontUnloadUnusedAsset → 永远死不了。
+    /// </summary>
+    private static Sprite? _fallbackPanel;
+    public static Sprite FallbackPanelSprite
+    {
+        get
+        {
+            try
+            {
+                if (_fallbackPanel != null) return _fallbackPanel;
+
+                const int S = 48;
+                const int R = 12;
+                const float RingW = 2.0f;
+
+                var tex = new UnityEngine.Texture2D(S, S, UnityEngine.TextureFormat.ARGB32, false);
+                tex.filterMode = UnityEngine.FilterMode.Bilinear;
+                tex.wrapMode = UnityEngine.TextureWrapMode.Clamp;
+
+                var px = new UnityEngine.Color32[S * S];
+                for (int y = 0; y < S; y++)
+                {
+                    for (int x = 0; x < S; x++)
+                    {
+                        // 圆角矩形 SDF（和 GradientButton 同一套算法）
+                        float dx = Mathf.Abs(x + 0.5f - S * 0.5f) - (S * 0.5f - R);
+                        float dy = Mathf.Abs(y + 0.5f - S * 0.5f) - (S * 0.5f - R);
+                        float outside = Mathf.Sqrt(Mathf.Max(dx, 0f) * Mathf.Max(dx, 0f) +
+                                                   Mathf.Max(dy, 0f) * Mathf.Max(dy, 0f));
+                        float d = outside + Mathf.Min(Mathf.Max(dx, dy), 0f) - R;
+
+                        float insideA = Mathf.Clamp01(0.5f - d);
+                        float ringA = Mathf.Clamp01(1f - Mathf.Abs(d + RingW * 0.5f) / (RingW * 0.5f + 0.5f));
+
+                        UnityEngine.Color fill = new(0.11f, 0.11f, 0.13f, 1f);
+                        UnityEngine.Color ring = new(0.42f, 0.40f, 0.36f, 1f);
+                        UnityEngine.Color c = UnityEngine.Color.Lerp(fill, ring, Mathf.Clamp01(ringA));
+
+                        px[y * S + x] = new UnityEngine.Color32(
+                            (byte)(Mathf.Clamp01(c.r) * 255),
+                            (byte)(Mathf.Clamp01(c.g) * 255),
+                            (byte)(Mathf.Clamp01(c.b) * 255),
+                            (byte)(Mathf.Clamp01(insideA) * 255));
+                    }
+                }
+                tex.SetPixels32(px);
+                tex.Apply(false, false);
+                tex.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+
+                float b = R + 2f;
+                _fallbackPanel = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f),
+                    100f, 0, SpriteMeshType.FullRect, new Vector4(b, b, b, b));
+                _fallbackPanel.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+                return _fallbackPanel;
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[VanillaAsset.FallbackPanelSprite]", ex);
+                return WhiteSprite;
+            }
+        }
+    }
+
     private static Sprite TryGetSprite(ref Sprite? field)
+        => TryGetSprite(ref field, null);
+
+    private static Sprite TryGetSprite(ref Sprite? field, Sprite? fallback)
     {
         try
         {
             EnsureLoaded();
-            return field ?? WhiteSprite;
+
+            // ⚠️⚠️ 必须用 `field != null`（会走 UnityEngine.Object 重载的 ==），
+            //    **绝不能写 `field ?? WhiteSprite`** ——
+            //    `??` 是**纯 C# 引用比较**，绕过 Unity 的重载，
+            //    识别不出"假 null"（对象已销毁但 C# 引用还在）。
+            //    用 `??` 的后果：把一个**已销毁的 Sprite** 赋给 SpriteRenderer.sprite
+            //    → 什么都不画，但碰撞盒还在 → 正是用户报的"能按但没图"。
+            if (field != null) return field;
+
+            // 缓存死了（多半是场景重载把原版资源卸了）→ 再抓一次
+            EnsureLoaded();
+            if (field != null) return field;
+
+            LightLogger.LogWarning("[VanillaAsset] 原版 Sprite 已失效且重新获取失败，退回白图");
+            return WhiteSprite;
         }
         catch (Exception ex)
         {
@@ -165,8 +291,12 @@ public static class VanillaAsset
     {
         try
         {
-            // TwitchManager 未就绪时不锁死标记，下次再尝试
-            if (_standardTextPrefab != null) return;
+            // ⚠️ 不能只看 _standardTextPrefab！
+            //    它是 Instantiate + DontDestroyOnLoad 出来的，**场景重载后依然活着**，
+            //    所以原来那句 `if (_standardTextPrefab != null) return;` 会**永远提前返回**，
+            //    里面那几个裸引用原版资源的 Sprite 一旦被卸载，就再也没机会补回来。
+            //    现在改成"prefab 在 且 那几个 Sprite 都还活着"才跳过。
+            if (_standardTextPrefab != null && VanillaSpritesAlive()) return;
 
             try
             {
@@ -174,17 +304,22 @@ public static class VanillaAsset
                 if (twitch == null) return;
                 var popUp = twitch.transform.GetChild(0);
 
-                _fullScreenSprite = popUp.GetChild(0).GetComponent<SpriteRenderer>().sprite;
-                _textButtonSprite = popUp.GetChild(2).GetComponent<SpriteRenderer>().sprite;
-                _popUpBackSprite = popUp.GetChild(3).GetComponent<SpriteRenderer>().sprite;
+                // 抓到就打标记，从此不再被场景卸载回收
+                _fullScreenSprite = Keep(popUp.GetChild(0).GetComponent<SpriteRenderer>().sprite);
+                _textButtonSprite = Keep(popUp.GetChild(2).GetComponent<SpriteRenderer>().sprite);
+                _popUpBackSprite = Keep(popUp.GetChild(3).GetComponent<SpriteRenderer>().sprite);
 
-                // 克隆文本预制体
-                _standardTextPrefab = Object.Instantiate(popUp.GetChild(1).GetComponent<TextMeshPro>(), null);
-                _standardTextPrefab.gameObject.hideFlags = HideFlags.HideAndDontSave;
-                Object.Destroy(_standardTextPrefab.GetComponent<SpriteRenderer>());
-                Object.DontDestroyOnLoad(_standardTextPrefab.gameObject);
+                // 文本预制体只在第一次克隆（它本来就是 DontDestroyOnLoad 的，重进场景还在）
+                if (_standardTextPrefab == null)
+                {
+                    _standardTextPrefab = Object.Instantiate(popUp.GetChild(1).GetComponent<TextMeshPro>(), null);
+                    _standardTextPrefab.gameObject.hideFlags = HideFlags.HideAndDontSave;
+                    Object.Destroy(_standardTextPrefab.GetComponent<SpriteRenderer>());
+                    Object.DontDestroyOnLoad(_standardTextPrefab.gameObject);
+                }
 
                 _triedInit = true;
+                LightLogger.Log("[VanillaAsset] 已(重新)获取原版 Sprite / 文本预制体");
             }
             catch
             {
@@ -193,7 +328,7 @@ public static class VanillaAsset
 
             try
             {
-                _closeButtonSprite = FindAsset<Sprite>("closeButton");
+                _closeButtonSprite = Keep(FindAsset<Sprite>("closeButton"));
             }
             catch { }
 
@@ -309,7 +444,11 @@ public static class VanillaAsset
         }
     }
 
-    private static T? FindAsset<T>(string name) where T : Object
+    /// <summary>
+    /// 按名字从**含未加载资产**的对象里找一个资产。
+    /// （Nebula 同款方式：`FindObjectsOfTypeIncludingAssets`，否则部分材质/字体找不到。）
+    /// </summary>
+    public static T? FindAsset<T>(string name) where T : Object
     {
         var type = Il2CppType.Of<T>();
         // 含未加载资产（Nebula 同款方式），否则部分材质/字体找不到
@@ -319,6 +458,33 @@ public static class VanillaAsset
                 return obj.TryCast<T>();
         }
         return null;
+    }
+
+    /// <summary>
+    /// 诊断：列出游戏里**所有** TMP_FontAsset（含未加载的）。
+    /// 找简中字体用 —— 名字对不上时把这批名字打出来就能直接定位。
+    /// </summary>
+    public static System.Collections.Generic.List<TMP_FontAsset> ListFontAssets()
+    {
+        var res = new System.Collections.Generic.List<TMP_FontAsset>();
+        try
+        {
+            foreach (var obj in Object.FindObjectsOfTypeIncludingAssets(Il2CppType.Of<TMP_FontAsset>()))
+            {
+                try
+                {
+                    if (obj == null) continue;
+                    var f = obj.TryCast<TMP_FontAsset>();
+                    if (f != null) res.Add(f);
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[VanillaAsset.ListFontAssets] {ex.Message}");
+        }
+        return res;
     }
 
     /// <summary>玩家自定义菜单预制体（含原版滚动条），懒加载，找不到返回 null</summary>

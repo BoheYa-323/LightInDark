@@ -5,6 +5,7 @@ using HarmonyLib;
 using Light.Config;
 using Light.UI;
 using Light.UI.Help;
+using Light.UI.MainMenu;
 using Light.UI.Window;
 using Light.Utilities;
 using LightInDark.Core;
@@ -31,15 +32,22 @@ namespace Light.Patches;
 public static class MainMenuPatch
 {
     private static bool _showingPanel;
+
+    /// <summary>
+    /// 让右侧面板滑走 / 回来。
+    /// 「更换背景图」打开时要滑走（否则它会从我们的弹窗旁边露出一块框）；
+    /// 关掉之后保持滑走状态（此时 LightScreen 也是关的，等于回到主界面）。
+    /// </summary>
+    public static void SetRightPanelVisible(bool visible) => _showingPanel = visible;
     private static GameObject? _rightPanel;
     private static Vector3 _rightPanelOp;
     private static GameObject? _lightScreen;
     private static GameObject? _lightSubScreen;
-    private static ImageGalleryPanel? _galleryPanel;
+    /// <summary>「更换背景图」面板（原来的 ImageGalleryPanel 已废弃，见 SetupGalleryScreen 注释）。</summary>
+    private static BackgroundPanel? _bgPanel;
     private static bool _bgMoved;
     private static float _bgMoveDelay;
     private static bool _updaterChecked;
-    private static bool _pendingRandomBackground;
     private static bool _bgInitialMoveDone;
     private static bool _hasBackground;
 
@@ -123,7 +131,7 @@ public static class MainMenuPatch
             _rightPanel = null;
             _lightScreen = null;
             _lightSubScreen = null;
-            _galleryPanel = null;
+            _bgPanel = null;
             LightLogger.LogWarning("[Light.UI] === 开始布局 ===");
 
             VanillaAsset.Preload();
@@ -233,7 +241,6 @@ public static class MainMenuPatch
             SetupLightScreen(__instance);
             SetupSubScreen(__instance);
             SetupGalleryScreen(__instance);
-            _galleryPanel?.RestoreBackground();
             MoveScreenTint(__instance);
             var decoTex = new Texture2D(1, 1);
             decoTex.SetPixel(0, 0, Color.white);
@@ -336,7 +343,7 @@ public static class MainMenuPatch
                     __instance.ResetScreen();
                     _showingPanel = true;
                     if (_lightSubScreen != null) _lightSubScreen.SetActive(false);
-                    if (_galleryPanel != null) _galleryPanel.Hide();
+                    if (_bgPanel != null) _bgPanel.Hide();
                     if (_lightScreen != null) _lightScreen.SetActive(true);
                 }));
             }
@@ -691,9 +698,19 @@ public static class MainMenuPatch
             var child4 = GetChild(_lightScreen.transform, 4);
             if (child4 != null) Object.Destroy(child4.gameObject);
 
+            // ⚠️ 兜底隐藏「兑换奖励」。
+            //    上面按**子物体序号 4** 找它，但序号会随预制体结构调整而错位（越界时
+            //    GetChild 返回 null，两个 `?.` / `if` 保护会**静默跳过**）。
+            //    实测它仍然显示出来，而且和我们新加的「更换背景图」叠在一起
+            //    （用户看到的就是三个按钮互相压）。
+            //    这里按**文字**再兜一次（后面还有按"是不是我建的"兜底，见 HideExtraButtons）。
+            HideButtonByText(_lightScreen, "兑换");
+
             var temp = GetChild(_lightScreen.transform, 3);
             if (temp == null) return;
             int index = 0;
+            // 记录我们自己创建的按钮，等下用它把预制体自带的杂项按钮摘掉
+            var mine = new List<GameObject>();
 
             void SetUpBtn(string text, System.Action clickAction)
             {
@@ -717,6 +734,7 @@ public static class MainMenuPatch
                     (index % 2 == 0) ? -1.45f : 1.45f,
                     0.98f - (index / 2) * 0.59f, 0f);
                 obj.transform.localScale = new Vector3(0.72f, 0.72f, 1f);
+                mine.Add(obj);
                 index++;
             }
 
@@ -725,11 +743,26 @@ public static class MainMenuPatch
             SetUpBtn("成就", () => LightLogger.LogWarning("[Light] 成就 - 待实现"));
             SetUpBtn("Discord", () => Application.OpenURL("https://discord.gg/"));
 
+            // 【新增】更换背景图 —— 打开模态面板（用户要求：Light 主界面变成 6 个按钮）
+            // 2 列布局下 index 4/5 正好是第三排的两个，不会多出一行。
+            SetUpBtn("更换背景图", () =>
+            {
+                if (_lightScreen != null) _lightScreen.SetActive(false);
+                _bgPanel?.Show();
+            });
+
             SetUpBtn("更多功能", () =>
             {
                 if (_lightScreen != null) _lightScreen.SetActive(false);
                 if (_lightSubScreen != null) _lightSubScreen.SetActive(true);
             });
+
+            // ⚠️ 最后兜一刀：把这个克隆面板里**所有不是我们建的**按钮全部藏掉。
+            //    为什么不靠子物体序号：序号会错位，而且越界时 GetChild 返回 null、
+            //    外面那几层空引用保护会**静默跳过** → 那个「兑换奖励」就留在界面上，
+            //    跟我们新加的「更换背景图」「更多功能」互相叠压（用户实际看到的现象）。
+            //    "凡不是我建的就关掉"不依赖任何序号/文字，最稳。
+            HideExtraButtons(_lightScreen, mine);
 
             var scalerList = Object.FindObjectOfType<SlicedAspectScaler>();
             if (scalerList != null)
@@ -741,6 +774,51 @@ public static class MainMenuPatch
         catch (Exception ex)
         {
             LightLogger.LogError("[MainMenuPatch.SetupLightScreen]", ex);
+        }
+    }
+
+    /// <summary>
+    /// 把这个克隆面板里**所有不是我们建的**按钮藏掉。
+    ///
+    /// 背景：LightScreen 是从原版 <c>accountButtons</c> 克隆的，预制体自带若干按钮
+    /// （其中一个叫「兑换奖励」）。原代码靠 <c>GetChild(transform, 4)</c> 定位并销毁它，
+    /// 但**子物体序号会错位**，越界时 <c>GetChild</c> 返回 null，外面两层空引用保护
+    /// 会静默跳过 → 那个按钮留在界面上，和新加的按钮叠在一起。
+    ///
+    /// 这里改成"**凡不是我建的就关掉**"，不依赖序号也不依赖文字。
+    /// </summary>
+    private static void HideExtraButtons(GameObject root, List<GameObject> mine)
+    {
+        try
+        {
+            if (root == null) return;
+            int hidden = 0;
+            foreach (var pb in root.GetComponentsInChildren<PassiveButton>(true))
+            {
+                if (pb == null) continue;
+                var go = pb.gameObject;
+                if (mine.Contains(go)) continue;      // 我们自己建的
+                if (!go.activeSelf) continue;         // 本来就关着
+
+                string label = "";
+                try
+                {
+                    var tmp = go.GetComponentInChildren<TextMeshPro>(true);
+                    if (tmp != null) label = tmp.text;
+                }
+                catch { }
+
+                go.SetActive(false);
+                hidden++;
+                LightLogger.Log($"[Light] 已隐藏 LightScreen 里多余的按钮：{go.name}" +
+                                (string.IsNullOrEmpty(label) ? "" : $"（文字「{label}」）"));
+            }
+            if (hidden > 0)
+                LightLogger.Log($"[Light] 共隐藏 {hidden} 个多余按钮（保留自建 {mine.Count} 个）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[MainMenuPatch.HideExtraButtons] {ex.Message}");
         }
     }
 
@@ -768,46 +846,89 @@ public static class MainMenuPatch
         }
     }
 
+    /// <summary>
+    /// 主界面背景系统初始化。
+    ///
+    /// ⚠️ 已**弃用** <c>ImageGalleryPanel</c>（那个类还在，但不再被调用），原因见
+    /// <see cref="BackgroundRenderer"/> 的类注释：
+    ///   · 它用 <c>DontDestroyOnLoad</c> → 对象活过所有场景 → **背景外泄**；
+    ///   · 它把位置写死成世界坐标 <c>z=520</c> → 相机一挪就跑出视锥 → **莫名其妙消失**。
+    ///
+    /// 现在素材来自磁盘目录（可放自己的图/视频），并使用新的渲染器 + 面板。
+    /// </summary>
     private static void SetupGalleryScreen(MainMenuManager __instance)
     {
         try
         {
-            var gallery = new ImageGalleryPanel();
-            int scanned = gallery.ScanBackgroundResources();
-            _hasBackground = scanned > 0;
-            if (!_hasBackground)
-                LightLogger.LogWarning("[Light] 未扫描到任何 BG_*.png，背景图不会显示");
-            else
-            {
-                var ambience = FindGO("Ambience");
-                if (ambience != null)
-                {
-                    ambience.transform.FindChild("PlayerParticles")?.gameObject.SetActive(false);
-                    if (ambience.transform.childCount > 0)
-                        ambience.transform.GetChild(0).gameObject.SetActive(false);
-                }
-            }
+            BackgroundStore.EnsureExtracted();
+            int count = BackgroundStore.Scan(force: true).Count;
+            _hasBackground = count > 0;
 
-            gallery.SetApplyCallback(index =>
-            {
-                LightLogger.Log($"[Light] 应用背景图 #{index}");
-                ButtonBreathEffect.Reload();
-            });
+            LightLogger.Log($"[Light] 背景素材 {count} 个（Image={BackgroundStore.ImageDir} / " +
+                            $"Video={BackgroundStore.VideoDir}）");
 
-            if (_lightSubScreen != null)
-                gallery.OnBack = () => _lightSubScreen.SetActive(true);
-            if (_pendingRandomBackground) _pendingRandomBackground = false;
-            if (_hasBackground)
-            {
-                LightLogger.Log("[Light] 显示随机背景");
-                gallery.ApplyRandomBackground();
-            }
+            if (_bgPanel == null || !_bgPanel.IsAlive)
+                _bgPanel = new BackgroundPanel();
 
-            _galleryPanel = gallery;
+            int layer = __instance.mainMenuUI != null
+                ? __instance.mainMenuUI.layer
+                : __instance.gameObject.layer;
+
+            BackgroundRenderer.OnMainMenuStart(layer);
+            BackgroundRenderer.LogDiagnostics();
+
+            // 主界面按钮样式（MOD / 原版 / 亚克力 + 逐按钮颜色）
+            MainMenuButtonStyler.Refresh(__instance);
+            MainMenuButtonStyler.Apply(force: true);
         }
         catch (Exception ex)
         {
             LightLogger.LogError("[MainMenuPatch.SetupGalleryScreen]", ex);
+        }
+    }
+
+    /// <summary>
+    /// 按**显示文字**隐藏面板里的某个按钮（往上找带 PassiveButton 的那一层）。
+    ///
+    /// 为什么需要：面板是从原版 <c>accountButtons</c> 克隆的，里面自带一个「兑换奖励」按钮。
+    /// 原代码靠 <c>GetChild(transform, 4)</c> 定位它，但**子物体序号会错位**，
+    /// 而且越界时 <c>GetChild</c> 返回 null、上面两层空引用保护会静默跳过 →
+    /// 那个按钮就留在界面上，和我们新加的按钮重叠。
+    /// 按文字找不依赖序号，最稳。
+    /// </summary>
+    private static void HideButtonByText(GameObject root, string needle)
+    {
+        try
+        {
+            if (root == null || string.IsNullOrEmpty(needle)) return;
+            foreach (var tmp in root.GetComponentsInChildren<TextMeshPro>(true))
+            {
+                if (tmp == null) continue;
+                var s = tmp.text;
+                if (string.IsNullOrEmpty(s) || !s.Contains(needle)) continue;
+
+                // 从文字往上找按钮本体
+                Transform? t = tmp.transform;
+                for (int i = 0; i < 6 && t != null; i++)
+                {
+                    if (t.GetComponent<PassiveButton>() != null) break;
+                    t = t.parent;
+                }
+
+                var go = (t != null && t.GetComponent<PassiveButton>() != null)
+                    ? t.gameObject
+                    : tmp.transform.parent?.gameObject;
+
+                if (go != null && go.activeSelf)
+                {
+                    go.SetActive(false);
+                    LightLogger.Log($"[Light] 已隐藏面板里多余的按钮「{needle}」（{go.name}）");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[MainMenuPatch.HideButtonByText] {ex.Message}");
         }
     }
 
@@ -953,39 +1074,44 @@ public static class MainMenuPatch
             var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
             bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
 
-            // 自定义背景对象（跨场景时 _galleryPanel 可能为 null，用 Find 兜底找到残留对象）
-            var bgObj = _galleryPanel?._bgObj;
-            if (bgObj == null) bgObj = FindGO("LightBackground");
-
+            // 自定义背景（新实现）。
+            // 旧实现靠"DontDestroyOnLoad + 世界坐标写死 z=520"，
+            // 于是必须在这里补一堆"进别的场景就 SetActive(false) + 缩到 0.0001"的补丁去藏，
+            // 而且相机一挪动它就跑出视锥 → "莫名其妙消失"。
+            // 现在 BackgroundRenderer 不用 DontDestroyOnLoad（场景卸载自动销毁，不可能外泄），
+            // 并且每帧跟随相机（永远在视野里、永远在 UI 后面）。见该类注释。
             if (!isMainOrMatch)
             {
-                // 非 MainMenu/MatchMaking 场景：隐藏并缩小到几乎不可见，杜绝背景外泄到其它场景
-                if (bgObj != null)
-                {
-                    bgObj.SetActive(false);
-                    bgObj.transform.localScale = Vector3.one * 0.0001f;
-                }
+                BackgroundRenderer.Shutdown();
                 _showingPanel = false;
+                BackgroundPanel.ResetIfSceneChanged();
+                MainMenuButtonStyler.ResetForSceneChange();
                 return;
             }
 
-            // MainMenu / MatchMaking：恢复背景尺寸与可见性（最多只剩首次创建的那一个，二次进入已被 SetupGalleryScreen 清掉）
-            if (bgObj != null)
-            {
-                float s = Mathf.Max((float)Screen.width / (float)Screen.height / (16f / 9f), 1f);
-                bgObj.transform.localScale = new Vector3(s, s, 1f);
-                if (!bgObj.activeSelf) bgObj.SetActive(true);
-            }
+            BackgroundRenderer.Tick();
+            BackgroundPanel.Active?.TickInput();
+
+            // 按钮样式：设置变了才真的重刷（Apply 内部有变化检测，每帧调代价极小）
+            MainMenuButtonStyler.Apply();
+
+            // 模态遮罩：把不属于我们窗口的原版控件临时禁用（见 UiModalGuard 的长注释，
+            // 里面有"为什么碰撞盒没用"和"为什么不能用 Harmony prefix"的完整证据）。
+            UiModalGuard.Sweep();
 
             ButtonBreathEffect.Update();
 
-            if (!_showingPanel)
+            // ⚠️⚠️ 这里**绝对不能**调 _bgPanel?.Hide()。
+            //   「更换背景图」面板显示期间我们故意把 _showingPanel 置 false
+            //   （好让右侧面板滑走腾地方），如果这里每帧再 Hide 一次，
+            //   面板刚打开就会被立刻关掉。
+            //   要关面板请走 ShowRightPanel / HideRightPanel / LightButton 那几处**显式**调用。
+            if (!_showingPanel && (_bgPanel == null || !_bgPanel.IsShown))
             {
                 if (_lightScreen != null && _lightScreen.activeSelf)
                     _lightScreen.SetActive(false);
                 if (_lightSubScreen != null && _lightSubScreen.activeSelf)
                     _lightSubScreen.SetActive(false);
-                _galleryPanel?.Hide();
             }
 
             if (_rightPanel != null)
@@ -1020,15 +1146,15 @@ public static class MainMenuPatch
                 }
             }
 
-            if (_bgMoved && _galleryPanel != null && _galleryPanel._bgObj == null)
-                _galleryPanel.RestoreBackground();
+            if (_bgMoved && _bgPanel != null && !_bgPanel.IsAlive)
+                _bgPanel = new BackgroundPanel();
         }
         catch (System.Exception)
         {
             _rightPanel = null;
             _lightScreen = null;
             _lightSubScreen = null;
-            _galleryPanel = null;
+            _bgPanel = null;
         }
     }
 
@@ -1043,7 +1169,7 @@ public static class MainMenuPatch
             _showingPanel = true;
             if (_lightScreen != null) _lightScreen.SetActive(false);
             if (_lightSubScreen != null) _lightSubScreen.SetActive(false);
-            if (_galleryPanel != null) _galleryPanel.Hide();
+            if (_bgPanel != null) _bgPanel.Hide();
         }
         catch (System.Exception)
         {
@@ -1060,7 +1186,7 @@ public static class MainMenuPatch
             _showingPanel = false;
             if (_lightScreen != null) _lightScreen.SetActive(false);
             if (_lightSubScreen != null) _lightSubScreen.SetActive(false);
-            _galleryPanel?.Hide();
+            _bgPanel?.Hide();
             DestroyableSingleton<AccountManager>.Instance
                 ?.transform.FindChild("AccountTab/AccountWindow")?.gameObject.SetActive(false);
         }
@@ -1187,9 +1313,8 @@ public static class MainMenuPatch
     }
 
     /// <summary>监听场景切换事件（自动注册为 SceneChangedEvent 监听者）。
-    ///  - 进入 MainMenu：标记"待随机背景"，供 SetupGalleryScreen 消费；
-    ///  - 进入 MainMenu/MatchMaking：恢复背景可见与尺寸；
-    ///  - 进入其它场景：隐藏并缩小背景（该事件在任意场景都会触发，弥补 LateUpdate 只在主菜单运行的缺口，杜绝背景外泄）。</summary>
+    ///  ⚠️ 背景的"跨场景外泄"已由 <see cref="BackgroundRenderer"/> 从根上解决
+    ///  （不用 DontDestroyOnLoad，对象随场景销毁），这里只负责收尾清状态。</summary>
     public static void OnSceneChanged(SceneChangedEvent ev)
     {
         try
@@ -1197,39 +1322,20 @@ public static class MainMenuPatch
             if (ev == null) return;
             bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
 
-            // 跨场景时 _galleryPanel 可能为 null，用 Find 兜底找到残留的背景对象
-            var bgObj = _galleryPanel?._bgObj;
-            if (bgObj == null) bgObj = FindGO("LightBackground");
-
             if (!isMainOrMatch)
             {
-                // 非 MainMenu/MatchMaking 场景：隐藏并缩小到几乎不可见，杜绝背景外泄到局内/其它场景
-                if (bgObj != null)
-                {
-                    bgObj.SetActive(false);
-                    bgObj.transform.localScale = Vector3.one * 0.0001f;
-                }
+                // 离开主菜单：把背景与面板全部拆掉（对象本来就会随场景销毁，这里是双保险）
+                BackgroundRenderer.Shutdown();
+                _bgPanel?.Hide();
+                _bgPanel = null;
                 _showingPanel = false;
+                // 遮罩一定要清，否则会把新场景的按钮全锁死
+                UiModalGuard.Clear();
                 return;
             }
 
-            // MainMenu / MatchMaking：恢复背景尺寸与可见性
-            if (bgObj != null)
-            {
-                float s = Mathf.Max((float)Screen.width / (float)Screen.height / (16f / 9f), 1f);
-                bgObj.transform.localScale = new Vector3(s, s, 1f);
-                if (!bgObj.activeSelf) bgObj.SetActive(true);
-            }
-
-            if (ev.EnteredMainMenu)
-            {
-                _pendingRandomBackground = true;
-                if (_galleryPanel != null)
-                {
-                    _pendingRandomBackground = false;
-                    _galleryPanel.ApplyRandomBackground();
-                }
-            }
+            // 进入主菜单：清掉上一次残留的遮罩登记
+            UiModalGuard.Clear();
         }
         catch (Exception ex)
         {

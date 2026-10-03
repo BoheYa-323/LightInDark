@@ -49,42 +49,47 @@ public partial class LightPlugin : BasePlugin
         try
         {
             //FirstChanceExceptionLogger.Initialize();
-            StaticLog = Log;
-            Harmony.PatchAll();
-            CurrentModRegistration.ModRegistrationGuidString = ModGuid; // 感谢树懒18.0+提供的牛逼Modded方法。
+            StaticLog = Log; // BepInEx日志
+            Harmony.PatchAll(); // 鸿蒙
+            CurrentModRegistration.ModRegistrationGuidString = ModGuid; // 感谢树懒18.0+提供的牛逼Modded方法。 MCI
             Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
-            LightSettingsData = LightSettings.LoadSettingData();
+            LightSettingsData = LightSettings.LoadSettingData(); // 存设置
             if (!VersionMaker.MakeVersion())
-                Log.LogError($"VM json 加载失败。具体异常请查看Light.log。");
-            LoadCommand();
-            LightOptionsRegistry.Register();
-            DebugConfig.Register();          // 配置块：调试设置（金色分类）
-            EventSystem.RegisterAssembly(typeof(LightPlugin).Assembly);
-            ExtractLanguageFiles();
-            Language.Load();
-            LidRpcRegistry.ScanAndPatch(Harmony);
-            ColorData = MainColor.LoadChatColor();
-            PaletteColorOverride.Apply();
-            LoadRole();
-            RoleConfigRegistrar.Register();   // 职业配置块：数量/概率 + 职业专属项
-            Dispatcher.Initialize();
+                Log.LogError($"VM json 加载失败。具体异常请查看Light.log。"); // 这将是重大问题。写版本号。
+            LoadCommand(); // 加载指令。
+            LightOptionsRegistry.Register(); // 注册设置Tab块。
+            RegisterAllConfigHead();        // 注册配置块
+            EventSystem.RegisterAssembly(typeof(LightPlugin).Assembly); // 注册事件
+            ExtractLanguageFiles(); // 解压语言文件
+            Language.Load(); // 加载语言文件
+            LidRpcRegistry.ScanAndPatch(Harmony); // RPC注册
+            ColorData = MainColor.LoadChatColor(); // 存颜色
+            PaletteColorOverride.Apply(); // 我也不知道。
+            LoadRole(); // 加载职业
+            RoleConfigRegistrar.Register();   // 职业配置块 + 职业专属项
+            Dispatcher.Initialize(); // 牛逼工具。
 #if !DEBUG
             LightLogger.ClearLog();
 #endif
-            RpcDefinitions.OnFreeChatStateChanged += show => ShowChatPatch.NeedShowFreeChat = show;
-            AddCursorComponent();
-            RegisterShowModStampOnMainMenu();
-            ChatHistoryLogUtils.Init();
-            // [已禁用-握手系统] 先确保模组可玩性，握手验证暂停（2026-09-26）。
-            // 恢复时取消注释下一行，并同步服务器 official.json 的 hash。
+            RpcDefinitions.OnFreeChatStateChanged += show => ShowChatPatch.NeedShowFreeChat = show; // 不知道喵呜写的。
+            AddCursorComponent(); // 鼠标。
+            RegisterShowModStampOnMainMenu(); // MOD STAMPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+            ChatHistoryLogUtils.Init(); // 聊天历史记录。
+
+            // 握手验证暂停 2026-09-26
             // Handshake.HandshakeManager.Initialize();
-            NewsManager.LoadNews();
+
+            NewsManager.LoadNews(); // 加载新闻。
             Log.LogInfo($"模组 {Name} v{Version} 已加载！");
         }
         catch (Exception ex)
         {
             LightLogger.LogError("[LightPlugin.Load]", ex);
         }
+    }
+    private static void RegisterAllConfigHead()
+    {
+        DebugConfig.Register();
     }
     private static void RegisterShowModStampOnMainMenu()
     {

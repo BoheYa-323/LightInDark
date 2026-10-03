@@ -40,6 +40,62 @@ namespace LightInDark.Configuration
 
         private static IGameOptions Options => GameOptionsManager.Instance?.CurrentGameOptions;
 
+        /// <summary>
+        /// 游戏选项系统是否已经初始化完毕。
+        ///
+        /// ⚠️ 为什么需要它：`NormalGameOptionsV12.Deserialize` 的 postfix 里直接读
+        /// `GameOptionsManager.Instance.CurrentGameOptions` 会**抛 NRE** ——
+        /// 那一刻 manager 还没把 CurrentGameOptions 赋上值（setter/getter 内部空引用）。
+        /// 实测每次运行都稳定复现一次，日志里是：
+        ///     System.NullReferenceException
+        ///       at GameOptionsManager.set_CurrentGameOptions (IGameOptions value)
+        ///       at GameOptionsManager.get_CurrentGameOptions ()
+        ///       at ConfigSync.get_Options()   ← line 41
+        ///       at ConfigSync.ApplyFromTag()  ← line 55
+        /// 我们的 try/catch 能兜住（不会崩游戏），但会往日志里刷一大段 IL2CPP 堆栈，
+        /// 干扰排查。正确做法是**时机不对就不要读**，而不是读了再吞异常。
+        ///
+        /// 只探测一次（缓存结果）：manager 一旦就绪就不会再变回未就绪。
+        /// </summary>
+        private static bool OptionsReady()
+        {
+            if (_optionsReady) return true;
+            try
+            {
+                var mgr = GameOptionsManager.Instance;
+                if (mgr == null) return false;
+
+                var o = mgr.CurrentGameOptions;
+                if (o == null) return false;
+
+                _optionsReady = true;
+                return true;
+            }
+            catch
+            {
+                // 还没就绪 —— 静默返回 false，不要 LogError 刷堆栈
+                return false;
+            }
+        }
+
+        private static bool _optionsReady;
+
+        /// <summary>有没有"因为时机不对而没做"的解 Tag 请求（等就绪后补做）。</summary>
+        private static bool _pendingApply;
+
+        /// <summary>
+        /// 补做之前被推迟的解 Tag。由每帧驱动调用（见 ConfigSyncDriver）。
+        /// 一旦 manager 就绪且确实有待办，就跑一次 ApplyFromTag。
+        /// </summary>
+        public static void TickPendingApply()
+        {
+            if (!_pendingApply) return;
+            if (!OptionsReady()) return;
+
+            _pendingApply = false;
+            ApplyFromTag();
+        }
+
         // =====================================================================
         //  读取：把远程/本地的 Tag 解回配置项
         // =====================================================================
@@ -52,6 +108,15 @@ namespace LightInDark.Configuration
         {
             try
             {
+                // ⚠️ 时机不对就直接返回（不打日志）。
+                // Deserialize 的 postfix 触发时 manager 还没就绪，硬读会抛 NRE。
+                // 见 OptionsReady() 的注释（那里有完整堆栈证据）。
+                if (!OptionsReady())
+                {
+                    _pendingApply = true;      // 记一笔，等就绪后补做
+                    return;
+                }
+
                 var opts = Options;
                 if (opts == null) return;
 

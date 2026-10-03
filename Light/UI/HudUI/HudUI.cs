@@ -169,7 +169,13 @@ public static class HudUIFont
 /// </summary>
 internal static class HudUITextHelper
 {
-    public static TextMeshPro Create(Transform parent)
+    /// <param name="overrideFont">
+    /// 指定字体（可选）。传 null 就走原来的 <see cref="HudUIFont"/> 自动解析。
+    /// 背景图替换那套界面会传"简中字体模板"的字体（见 MenuTextTemplate2），
+    /// 让中文用游戏自带的 NotoSansSC 字形，而不是靠 fallback 硬撑。
+    /// </param>
+    public static TextMeshPro Create(Transform parent, TMP_FontAsset? overrideFont = null,
+        Material? overrideMat = null)
     {
         try
         {
@@ -180,11 +186,21 @@ internal static class HudUITextHelper
 
             var tmp = obj.AddComponent<TextMeshPro>();
 
-            HudUIFont.EnsureLoaded();
-            if (HudUIFont.FontAsset != null)
+            if (overrideFont != null)
             {
-                tmp.font = HudUIFont.FontAsset;
-                tmp.fontSharedMaterial = HudUIFont.FontMaterial;
+                // ⚠️ 换字体**必须同时换材质**：字形来自字体自己的图集材质，
+                //    只写 font 会继续用旧材质 → 字看不见或乱码。
+                tmp.font = overrideFont;
+                if (overrideMat != null) tmp.fontSharedMaterial = overrideMat;
+            }
+            else
+            {
+                HudUIFont.EnsureLoaded();
+                if (HudUIFont.FontAsset != null)
+                {
+                    tmp.font = HudUIFont.FontAsset;
+                    tmp.fontSharedMaterial = HudUIFont.FontMaterial;
+                }
             }
 
             tmp.enableAutoSizing = false;
@@ -656,6 +672,10 @@ public class HudUIButton
             hudButton.ApplySize(btnSize);
 
             var button = obj.AddComponent<PassiveButton>();
+            // ⚠️ 必须在这里补一次：HudUIButton 的构造函数是在 AddComponent<PassiveButton>()
+            //    **之前**调用的，那时 obj 上还没有 PassiveButton → `Button` 属性恒为 null。
+            //    外部代码（如 BackgroundPanel）想给按钮追加 OnMouseOver 监听时会 NRE。
+            hudButton.Button = button;
             button.OnMouseOver = new UnityEvent();
             button.OnMouseOut = new UnityEvent();
             button.OnClick = new Button.ButtonClickedEvent();
@@ -737,6 +757,7 @@ public class HudUIButton
             hudButton.ApplySize(btnSize);
 
             var button = obj.AddComponent<PassiveButton>();
+            hudButton.Button = button;      // 同上：构造函数拿不到还没添加的组件
             button.OnMouseOver = new UnityEvent();
             button.OnMouseOut = new UnityEvent();
             button.OnClick = new Button.ButtonClickedEvent();
@@ -943,6 +964,36 @@ public class HudUIWindow
     }
 
     public void Close() => Screen.CloseScreen();
+
+    /// <summary>
+    /// 把这个窗口里**所有**文字换成本模组的"简中字体模板"字体。
+    ///
+    /// 用法：**等所有 AddText / AddButton 都加完之后**再调一次。
+    /// （AddButton 的标签也是内部建的 TMP，所以必须放在最后统一刷。）
+    /// </summary>
+    public void ApplyCjkFont()
+    {
+        try
+        {
+            var font = Light.UI.Window.MenuTextTemplate2.Font;
+            if (font == null) return;
+            var mat = Light.UI.Window.MenuTextTemplate2.FontMaterial;
+
+            int n = 0;
+            foreach (var tmp in Screen.GetComponentsInChildren<TextMeshPro>(true))
+            {
+                if (tmp == null) continue;
+                tmp.font = font;
+                if (mat != null) tmp.fontSharedMaterial = mat;
+                n++;
+            }
+            LightLogger.Log($"[HudUIWindow] 已把 {n} 段文字换成简中字体 {font.name}");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[HudUIWindow.ApplyCjkFont] {ex.Message}");
+        }
+    }
 
     public void ClearContent()
     {

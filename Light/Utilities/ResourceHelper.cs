@@ -38,7 +38,7 @@ public static class ResourceHelper
         {
             Texture2D texture = new(2,2,TextureFormat.ARGB32,true);
             Assembly assembly = Assembly.GetExecutingAssembly();
-            Stream stream = assembly.GetManifestResourceStream(path);
+            Stream stream = assembly.GetManifestResourceStream(path)!;
             long length = stream.Length;
             Il2CppStructArray<byte> byteTexture = new(length);
             stream.Read(new Span<byte>(IntPtr.Add(byteTexture.Pointer,IntPtr.Size*4).ToPointer(),(int)length));

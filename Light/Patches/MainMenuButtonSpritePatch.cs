@@ -5,6 +5,7 @@ using BepInEx.Unity.IL2CPP.Utils.Collections;
 using HarmonyLib;
 using Light.Utilities;
 using Light.UI.Window;
+using Light.UI.MainMenu;
 using LightInDark.Core;
 using TMPro;
 using UnityEngine;
@@ -39,6 +40,16 @@ public static class MainMenuButtonSpritePatch
     {
         try
         {
+            // ⚠️ 样式不是 MOD 时**整个跳过**。
+            //    用户要的「原版按钮（一点贴图都不换）」只能靠"根本不替换"来实现 ——
+            //    因为下面的 HideDecorations 会 **Destroy** 掉图标，销毁了没法还原，
+            //    "先替换再撤回"这条路走不通。
+            if (Suppress || StyleIsNotMod())
+            {
+                LightLogger.Log("[MainMenuButtonSprite] 当前不是 MOD 样式，跳过左侧按钮贴图替换");
+                return;
+            }
+
             foreach (var (file, pick) in Buttons)
             {
                 try
@@ -131,6 +142,12 @@ public static class MainMenuButtonSpritePatch
     {
         try
         {
+            if (Suppress || StyleIsNotMod())
+            {
+                LightLogger.Log("[MainMenuButtonSprite] 当前不是 MOD 样式，跳过右侧面板贴图替换");
+                return;
+            }
+
             foreach (var (file, pick, scale) in RightPanelButtons)
             {
                 try
@@ -188,6 +205,10 @@ public static class MainMenuButtonSpritePatch
     /// </summary>
     private static void GuardSprites()
     {
+        // ⚠️ 外部（MainMenuButtonStyler）切到「原版样式 / 亚克力样式」时会把这里置 true。
+        //    那时必须停手，否则每帧把模组 PNG 补回来，用户选的样式根本显示不出来。
+        if (Suppress || StyleIsNotMod()) return;
+
         foreach (var (label, sr, expected) in _watch)
         {
             try
@@ -298,7 +319,9 @@ public static class MainMenuButtonSpritePatch
         try { sprite.name = "LID_" + System.IO.Path.GetFileNameWithoutExtension(relativePath); } catch { }   // 给运行时 sprite 起名，日志才看得清
 
         // ── 贴图赋值 ────────────────────────────────────────────────────
+        // 每一次改动都登记一条"撤销动作"，供切换回原版样式时还原。
         var assigned = new HashSet<SpriteRenderer> { mainSr };
+        Record(() => { if (mainSr != null) mainSr.sprite = oldSpr; });
         mainSr.sprite = sprite;
 
         // 全尺寸的状态贴图（>= 主图面积的 50%）也一并换成新图：
@@ -316,6 +339,9 @@ public static class MainMenuButtonSpritePatch
             bool fullSize = !fitInside || (oldMainArea > 0f && SpriteArea(sr.sprite) >= oldMainArea * 0.5f);
             if (fullSize)
             {
+                var srCaptured = sr;
+                var oldSprState = sr.sprite;
+                Record(() => { if (srCaptured != null) srCaptured.sprite = oldSprState; });
                 sr.sprite = sprite;
                 assigned.Add(sr);
             }
@@ -332,6 +358,8 @@ public static class MainMenuButtonSpritePatch
             {
                 if (sr == null || assigned.Contains(sr)) continue;
                 if (!sr.enabled) continue;
+                var srOff = sr;
+                Record(() => { if (srOff != null) srOff.enabled = true; });
                 sr.enabled = false;
                 hidden++;
             }
@@ -350,6 +378,82 @@ public static class MainMenuButtonSpritePatch
 
     /// <summary>替换过的渲染器，供保图守卫每帧检查（只守贴图，颜色交给原版）。</summary>
     private static readonly List<(string Label, SpriteRenderer Sr, Sprite Expected)> _watch = new();
+
+    /// <summary>
+    /// true = 暂停保图守卫。
+    /// 由 <see cref="Light.UI.MainMenu.MainMenuButtonStyler"/> 控制：
+    /// 选了「原版样式 / 亚克力样式」就把模组 PNG 让位给原版贴图，守卫必须停手。
+    /// </summary>
+    public static bool Suppress { get; set; }
+
+    /// <summary>
+    /// 当前设置是不是"非 MOD 样式"。
+    /// 直接读设置而不是只看 Suppress 标志：MainMenuPatch 和本类的 postfix
+    /// 执行顺序不确定，靠标志位可能来不及设置，就会在进主菜单时错误地贴上模组图。
+    /// </summary>
+    private static bool StyleIsNotMod()
+    {
+        try
+        {
+            AppearanceSettings.EnsureLoaded();
+            return AppearanceSettings.ButtonStyle != MainButtonStyle.Mod;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 撤销动作栈：<see cref="ReplaceButton"/> 每改一样东西就压一条进来，
+    /// 切回「原版样式」时按顺序全部回滚。
+    ///
+    /// ⚠️ 只能还原**贴图和 enabled**。图标（Icon）是被 <c>Destroy</c> 掉的，
+    ///    销毁了没法复活 —— 所以真正的"完全原版"要靠 <see cref="Suppress"/>
+    ///    **在替换之前就拦住**（进主菜单时按当前样式决定跑不跑）。
+    /// </summary>
+    private static readonly List<Action> _undo = new();
+
+    private static void Record(Action undo)
+    {
+        try { _undo.Add(undo); } catch { }
+    }
+
+    /// <summary>把所有替换回滚（贴图 + enabled + 文字色）。</summary>
+    public static void RestoreOriginals()
+    {
+        int n = 0;
+        try
+        {
+            for (int i = _undo.Count - 1; i >= 0; i--)
+            {
+                try { _undo[i]?.Invoke(); n++; } catch { }
+            }
+            _undo.Clear();
+            _watch.Clear();
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[MainMenuButtonSprite.RestoreOriginals]", ex);
+        }
+        LightLogger.Log($"[MainMenuButtonSprite] 已回滚 {n} 项改动（贴图/enabled）");
+    }
+
+    /// <summary>重新贴一遍模组图（切回 MOD 样式时用）。</summary>
+    public static void ReapplyModSprites()
+    {
+        try
+        {
+            var menu = UnityEngine.Object.FindObjectOfType<MainMenuManager>();
+            if (menu == null) return;
+            Suppress = false;
+            _watch.Clear();          // 重新登记，避免重复条目
+            StartPostfix(menu);
+            RightPanelPostfix(menu);
+            LightLogger.Log("[MainMenuButtonSprite] 已重新贴上模组贴图");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[MainMenuButtonSprite.ReapplyModSprites]", ex);
+        }
+    }
 
     /// <summary>名字里带这些词的渲染器优先当"主图"（真正的按钮底/卡片大图）。</summary>
     private static readonly string[] BackgroundHints =
@@ -596,6 +700,20 @@ public static class MainMenuButtonSpritePatch
     {
         try
         {
+            // 记下原来的文字色，切回原版样式时要还原
+            var oldActive = btn.activeTextColor;
+            var oldInactive = btn.inactiveTextColor;
+            var oldSelected = btn.selectedTextColor;
+            var oldDisabled = btn.disabledTextColor;
+            Record(() =>
+            {
+                if (btn == null) return;
+                btn.activeTextColor = oldActive;
+                btn.inactiveTextColor = oldInactive;
+                btn.selectedTextColor = oldSelected;
+                btn.disabledTextColor = oldDisabled;
+            });
+
             btn.activeTextColor = GlowWhite;
             btn.inactiveTextColor = GlowWhite;
             btn.selectedTextColor = GlowWhite;

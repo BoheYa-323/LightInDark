@@ -384,6 +384,15 @@ AGENTS.md
 UI设计稿记录.md
 新闻系统移植研究报告.md
 
+# agent —— AI 助手写的 PowerShell 自测/调试脚本(只在本机跑，不提交)
+#   GameInput.ps1    模拟按键/鼠标给游戏
+#   RunSelfTest.ps1  自动跑一遍主界面自测
+#   StressTest.ps1   压力测试
+#   BgSmoke.ps1      背景图功能冒烟测试
+Tools/*.ps1
+Tools/*.psm1
+Tools/*.psd1
+
 # VerificationServer 生成物（构建输出、发布目录、密钥与 zip 包）
 VerificationServer/bin/
 VerificationServer/obj/

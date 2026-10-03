@@ -203,6 +203,7 @@ namespace Light.UI.Config
                 }
 
                 LightLogger.Log($"[ConfigUIPanel] 已铺入原版容器 '{container.name}'：行 {_rowCount} 个");
+                SnapshotBuiltKeys();     // 同上：记录实际建出的行
                 LogContainerState(menu, "BuildIntoVanilla");
 
                 UpdateScrollBounds(menu, startY, y);
@@ -408,7 +409,20 @@ namespace Light.UI.Config
             try
             {
                 foreach (var go in _spawned)
-                    if (go != null) Object.Destroy(go);
+                {
+                    if (go == null) continue;
+
+                    // ⚠️ 必须**立刻**销毁，不能只靠 Object.Destroy。
+                    //
+                    // Unity 的 Object.Destroy 是**延迟到帧末**执行的。而我们的流程是
+                    // "同一帧内先销毁旧行、紧接着又建新行"（Rebuild→Clear→Build），
+                    // 于是那一帧里新旧两套行**同时存在于容器中**：
+                    //   · 原版按 ChildCount/层级重建导航时会把两套都算进去；
+                    //   · 新行还没走完 Start→Initialize 时旧行仍在响应点击。
+                    // 用户看到的就是"复选框成对出现 [] [x] [x] []"和"点两下才生效"。
+                    // DestroyImmediate 已经存在，用它保证容器里同帧只有一套行。
+                    Object.DestroyImmediate(go);
+                }
             }
             catch (Exception ex)
             {
@@ -420,7 +434,7 @@ namespace Light.UI.Config
             _rowCount = 0;
             RowMap.Clear();
 
-            if (_page != null) { Object.Destroy(_page); _page = null; _container = null; }
+            if (_page != null) { Object.DestroyImmediate(_page); _page = null; _container = null; }
         }
 
         /// <summary>宿主 GameOptionsMenu（"MOD 设置"页签背后的那个）。</summary>
@@ -546,6 +560,7 @@ namespace Light.UI.Config
                 }
 
                 LightLogger.Log($"[ConfigUIPanel] 已构建配置面板：行 {_rowCount} 个，子物体 {_spawned.Count} 个");
+                SnapshotBuiltKeys();     // 记录"实际建出了哪些行"，供 Refresh 做集合比较
                 if (hostForClean != null)
                 {
                     LogContainerState(hostForClean, "Build");
@@ -792,8 +807,36 @@ namespace Light.UI.Config
         /// <summary>清空重建（值变化导致可见性变化时调用）。</summary>
         public static void Rebuild(Transform parent)
         {
+            // 诊断：把调用栈打出来，定位"谁在反复触发重建"。
+            // 已经排查了三轮都是靠推测，这次直接看调用者。
+            LogRebuildCaller();
+
             Clear();
             Build(parent);
+        }
+
+        private static int _rebuildCount;
+
+        private static void LogRebuildCaller()
+        {
+            try
+            {
+                _rebuildCount++;
+                if (_rebuildCount > 12) return;    // 只看前几次，避免刷屏
+
+                var st = new System.Diagnostics.StackTrace(2, false);
+                var sb = new System.Text.StringBuilder();
+                int frames = 0;
+                for (int i = 0; i < st.FrameCount && frames < 6; i++)
+                {
+                    var m = st.GetFrame(i)?.GetMethod();
+                    if (m == null) continue;
+                    sb.Append(m.DeclaringType?.Name).Append('.').Append(m.Name).Append(" < ");
+                    frames++;
+                }
+                LightLogger.Log($"[ConfigUIPanel.Diag] 第 {_rebuildCount} 次 Rebuild，调用链：{sb}");
+            }
+            catch { }
         }
 
         /// <summary>清空（销毁一切并复原状态）。</summary>
@@ -1193,11 +1236,24 @@ namespace Light.UI.Config
         /// ⚠️ 这些增量是 TONE 的实测值，**照抄**即可；不要再自己推算
         ///    （之前"猜部件名 + 硬编码尺寸"就是因为没照抄才做坏的）。
         /// </summary>
-        private static void ApplyRowLayout(OptionBehaviour row, ConfigItem item)
+        private static void ApplyRowLayout(OptionBehaviour row, ConfigItem item,
+                                           ToggleOption? realToggle = null,
+                                           NumberOption? realNumber = null,
+                                           StringOption? realString = null)
         {
             try
             {
                 var t = row.transform;
+
+                // 诊断：确认真实组件类型（一次性）。
+                if (!_layoutLogged.Contains(item.Key))
+                {
+                    _layoutLogged.Add(item.Key);
+                    LightLogger.Log($"[ConfigUIPanel.Diag] ApplyRowLayout 进入 {item.Key} " +
+                                    $"rowType={row.GetType().Name} " +
+                                    $"toggle={(realToggle != null)} number={(realNumber != null)} " +
+                                    $"string={(realString != null)}");
+                }
 
                 // ① 灰色标签底：**只把高度收一点点**，让相邻两行之间留出一条缝。
                 //
@@ -1224,15 +1280,43 @@ namespace Light.UI.Config
                 //     PlusButton +1.7 / MinusButton +0.9 / ValueBox +1.3
                 //   —— 全是 TONE 为**它自己**的行宽校准的数值。
                 //      我们的行就是原版预制体、原版缩放、原版坐标，套上去就歪/穿模。
-                // 标题文本：优先用原版控件的**强类型字段**，名字查找只作兜底
-                // （字段指向的对象名不保证叫 "Title Text"，用名字找可能静默找不到 → 字体没换上去）
-                TextMeshPro? tmp = row switch
+                // ② 复选框：**修复 CheckMark 为 null 的问题**
+                //
+                // 实测（日志）：克隆出来的 ToggleOption 上
+                //     Bind 后 lid.debug.enabled itemBool=False CheckMark=null
+                // CheckMark 字段是 **null** —— 于是：
+                //   · ConfigRowDriver.RefreshVisual 的 `if (CheckMark != null)` 静默跳过
+                //     → 我们永远写不进初始状态；
+                //   · 界面上看到的那个"勾"来自**预制体自带的精灵**，与 CheckMark 无关，
+                //     所以它恒亮 → 表现为"配置是关的，但框里一直有勾"；
+                //   · 原版 Toggle() 读写的也是这个 null 字段 → 状态彻底对不上，
+                //     就是用户说的"要点两次才能变成未选中"。
+                //
+                // 修法：CheckMark 为空时，在行的子物体里找出真正的勾选渲染器补上去。
+                // 判定顺序（从最可能到兜底）：
+                //   1) 名字含 "CheckMark" / "Check" 的 SpriteRenderer
+                //   2) 名为 "CheckBox" 的物体下第一个 SpriteRenderer
+                //   3) 不补 —— 宁可不动，也不要乱抓一个渲染器当勾
+                if (realToggle != null && realToggle.CheckMark == null)
                 {
-                    ToggleOption tg => tg.TitleText,
-                    NumberOption nm => nm.TitleText,
-                    StringOption so => so.TitleText,
-                    _ => null,
-                };
+                    var found = FindCheckMarkRenderer(t);
+                    if (found != null)
+                    {
+                        realToggle.CheckMark = found;
+                        LightLogger.Log($"[ConfigUIPanel] 已为行 {item.Key} 补上 CheckMark：" +
+                                        $"{found.name}@{PathOf(found.transform)}");
+                    }
+                    else
+                    {
+                        LightLogger.LogWarning($"[ConfigUIPanel] 行 {item.Key} 找不到勾选渲染器" +
+                                               $"（CheckMark 仍为 null，勾选状态将无法显示）");
+                    }
+                }
+
+                // 标题文本：用**真实组件**的强类型字段（row 的静态类型是基类，用 is 判断会全 false）
+                TextMeshPro? tmp = realToggle?.TitleText
+                                   ?? realNumber?.TitleText
+                                   ?? realString?.TitleText;
                 if (tmp == null)
                 {
                     var title = t.Find("Title Text");
@@ -1257,8 +1341,57 @@ namespace Light.UI.Config
             }
         }
 
-        // 【已删除】ShiftValueBox / Shift 两个辅助方法。
-        // 它们把数值框 +1.3、加号 +1.7、减号 +0.9 硬挪，是"数字框/加减号是歪的"的根因；
+        /// <summary>打印一个 Transform 的层级路径（诊断用）。</summary>
+        private static string PathOf(Transform t)
+        {
+            if (t == null) return "null";
+            var sb = new System.Text.StringBuilder(t.name);
+            var cur = t.parent;
+            int guard = 0;
+            while (cur != null && guard++ < 8)
+            {
+                sb.Insert(0, cur.name + "/");
+                cur = cur.parent;
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 在行内找出真正的"勾选"渲染器，用来修补 ToggleOption.CheckMark == null。
+        ///
+        /// 判定顺序：
+        ///   1) 名字含 "CheckMark" 的 SpriteRenderer（原版命名）
+        ///   2) 名为 "CheckBox" 的物体下的第一个 SpriteRenderer
+        ///   3) 返回 null（宁可不动，也不乱抓）
+        ///
+        /// ⚠️ 只找 SpriteRenderer：复选框的勾是精灵，文字是 TMP，别混。
+        /// </summary>
+        private static SpriteRenderer? FindCheckMarkRenderer(Transform row)
+        {
+            // ① 名字含 CheckMark / Check 的
+            var all = row.GetComponentsInChildren<SpriteRenderer>(true);
+            if (all != null)
+            {
+                foreach (var sr in all)
+                {
+                    if (sr == null) continue;
+                    string n = sr.name;
+                    if (n.IndexOf("CheckMark", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return sr;
+                }
+                // ② CheckBox 物体下的第一个
+                foreach (var sr in all)
+                {
+                    if (sr == null) continue;
+                    var chain = PathOf(sr.transform);
+                    if (chain.IndexOf("CheckBox", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return sr;
+                }
+            }
+            return null;
+        }
+
+        // 【已删除】ShiftValueBox / Shift 两个辅助方法。        // 它们把数值框 +1.3、加号 +1.7、减号 +0.9 硬挪，是"数字框/加减号是歪的"的根因；
         // 现在一律保留原版位置，故不再需要。
         // 说明：TONE 的 OptionBehaviourSetSizeAndPosition 里有这些位移，但那是为
         // TONE 自己的行宽校准的，直接套到原版行上就会歪 —— 不要照抄坐标。
@@ -1278,12 +1411,13 @@ namespace Light.UI.Config
 
                 string titleInfo = "无", valueInfo = "无", same = "n/a";
 
-                var t = row is ToggleOption tt ? tt.TitleText
-                      : row is NumberOption nn ? nn.TitleText
-                      : row is StringOption ss ? ss.TitleText : null;
+                // ⚠️ 用 GetComponent 而不是 is —— 静态类型是基类，is 判断会全 false
+                var t = row.GetComponent<ToggleOption>()?.TitleText
+                        ?? row.GetComponent<NumberOption>()?.TitleText
+                        ?? row.GetComponent<StringOption>()?.TitleText;
 
-                TextMeshPro? v = row is NumberOption n2 ? n2.ValueText
-                               : row is StringOption s2 ? s2.ValueText : null;
+                TextMeshPro? v = row.GetComponent<NumberOption>()?.ValueText
+                                 ?? row.GetComponent<StringOption>()?.ValueText;
 
                 if (t != null) titleInfo = $"{t.name}#{t.GetInstanceID()} text='{t.text}'";
                 if (v != null)
@@ -1304,9 +1438,9 @@ namespace Light.UI.Config
             try
             {
                 TextMeshPro? title =
-                    row is ToggleOption t ? t.TitleText :
-                    row is NumberOption n ? n.TitleText :
-                    row is StringOption s ? s.TitleText : null;
+                    row.GetComponent<ToggleOption>()?.TitleText
+                    ?? row.GetComponent<NumberOption>()?.TitleText
+                    ?? row.GetComponent<StringOption>()?.TitleText;
 
                 if (title == null) return;
 
@@ -1347,7 +1481,35 @@ namespace Light.UI.Config
 
                 var clone = Object.Instantiate(origin, Vector3.zero, Quaternion.identity, _container);
                 clone.gameObject.name = $"LightConfigRow_{item.Key}";
+                _instantiated++;   // 诊断：本次会话一共实例化过多少行
                 clone.transform.localPosition = new Vector3(RowX, y, RowZ);
+
+                // ⚠️⚠️ 实测（日志）：
+                //     ApplyRowLayout 进入 lid.debug.enabled rowType=OptionBehaviour isToggle=False
+                // Instantiate 的静态返回类型是 **OptionBehaviour（基类）**，
+                // 于是后面所有 `row is ToggleOption` / `is NumberOption` / `is StringOption`
+                // **全部为 false**，一连串代码静默走空：
+                //   · ApplyRowLayout 里"补 CheckMark"分支不执行 → CheckMark 恒为 null；
+                //   · ConfigRowDriver.GetTitleText() 退回 GetComponentInChildren 兜底；
+                //   · RefreshVisual 走 else 分支去写 GetValueText()，而基类没有 ValueText
+                //     → 返回 null → **什么都不写** → 数值框里残留的正是原版写的标题文字。
+                //     ← 这就是用户反复报告的"数值框里显示的是标题"！
+                //
+                // 修法：不要信 Instantiate 的静态类型，用 **GetComponent** 取真实组件，
+                // 运行时类型才是对的。下面统一换成 real* 三个变量。
+                var realToggle = clone.GetComponent<ToggleOption>();
+                var realNumber = clone.GetComponent<NumberOption>();
+                var realString = clone.GetComponent<StringOption>();
+
+                if (!_typeLogged.Contains(item.Key))
+                {
+                    _typeLogged.Add(item.Key);
+                    LightLogger.Log($"[ConfigUIPanel.Diag] 行 {item.Key} 真实组件：" +
+                                    $"ToggleOption={(realToggle != null)} " +
+                                    $"NumberOption={(realNumber != null)} " +
+                                    $"StringOption={(realString != null)} " +
+                                    $"（Instantiate 静态类型={clone.GetType().Name}）");
+                }
 
                 // ⚠️ 绝对不要把 localScale 设成 one！
                 // 原版行预制体（GameOption_Number(Clone) 等）自身是 0.60 的缩放，
@@ -1388,7 +1550,7 @@ namespace Light.UI.Config
 
                 // 行内布局照抄 TONE 的 OptionBehaviourSetSizeAndPosition：
                 // 拉宽标签底、标题左对齐加粗、右侧控件右移，并统一换成辉光白字体
-                ApplyRowLayout(clone, item);
+                ApplyRowLayout(clone, item, realToggle, realNumber, realString);
 
                 // 驱动器：修正标题文字（原版会按 setting.Title 写）
                 var driver = AddComponentSafe<ConfigRowDriver>(clone.gameObject);
@@ -1397,6 +1559,18 @@ namespace Light.UI.Config
                     driver.Bind(item, clone);
                     _drivers[item] = driver;
                     driver.RefreshVisual();
+
+                    // 诊断：驱动器写完之后的即时状态。
+                    // 若这里是 False 而之后变成 True，说明有别的写入者（原版 Start/Initialize
+                    // 或预制体自身）在我们之后覆盖了 CheckMark。
+                    if (item.Type == ConfigType.Bool && _bindLogs < 10)
+                    {
+                        _bindLogs++;
+                        LightLogger.Log($"[ConfigUIPanel.Diag] Bind 后 {item.Key} " +
+                                        $"itemBool={item.GetBool()} " +
+                                        $"CheckMark={(realToggle?.CheckMark == null ? "null" : realToggle.CheckMark.enabled.ToString())} " +
+                                        $"go.active={clone.gameObject.activeInHierarchy}");
+                    }
                 }
                 else
                 {
@@ -1454,26 +1628,51 @@ namespace Light.UI.Config
         /// <summary>
         /// 【Nebula 风格】每次值变化都重新查一遍可见性。
         ///
-        /// 用户反馈："调试模式打勾后，应该显示的假人要重新开一遍菜单才能看到（取消勾选却立即消失）"。
+        /// ⚠️ 重要：**只有真正需要时**才重建，并且判定必须用"可见集合"而不是逐项配对。
         ///
-        /// 原因（原来这里是遍历 `_drivers` 判定）：
-        ///   勾选前"生成假人的数量"是**不可见**的，Build 时就被 `if (!item.IsVisible) continue;`
-        ///   跳过了 → 它**根本没有被建出来** → `_drivers` 里没有它 → 原来的循环
-        ///   遍历不到任何"可见性变了"的项 → 不触发重建 → 行永远不出现，只能重开菜单。
-        ///   而取消勾选时，行**已经存在**于 `_drivers` 里，所以能被发现并立即隐藏 —— 这就是那个不对称。
+        /// 实测（日志）：每次点击复选框都会触发一次整页重建
+        /// （`会话内共实例化` 从 1 一路涨到 9，实例 ID 每次点击都变），
+        /// 表现就是用户说的"还是要点两下" —— 点一下页面就被重建，
+        /// 看到的勾选态来自"值还没生效时建出来的新行"。
         ///
-        /// 修法：判定基准从"已建的行"换成**注册表里的全部配置项**，
-        /// 拿 `item.IsVisible` 和"这一项现在有没有被建出来"对比。
-        /// 任何一项只要"该显示却没建"或"已建却不该显示"，就整页重建。
-        /// 这样勾选/取消都立即生效，且和 Nebula 的 predicate 语义一致
-        /// （`ConfigItem.SetVisibleWhen(Func<bool>)` / `SetDependsOn(item)` 就是那个"可选 lambda"）。
+        /// 原因：判定写成 `item.IsVisible != _drivers.ContainsKey(item)`，
+        /// 而 `IsVisible` 里可能带 lambda（`() => Enabled.GetBool()`），
+        /// 它读的是 **ConfigItem 的值**；点击时 CheckMark 已翻转，但 ConfigItem 的值
+        /// 要等 AfterChange 才写回 → 这一刻两者必然"不一致" → 每次点击都重建。
+        ///
+        /// 修法：先把"应当可见的项集合"和"已建出来的项集合"都收集完再比较，
+        /// 并且**先同步值再判定**（见 AfterChange 的调用顺序）。
         /// </summary>
         public static void Refresh()
         {
             try
             {
-                if (VisibilityChanged())
+                // 诊断：把 Refresh 的输入和判定结果打出来。
+                // 之前几轮都是"改了但不知道有没有跑到"，这次把每次 Refresh 都记下来。
+                if (_refreshLogs < 20)
                 {
+                    _refreshLogs++;
+                    var en = ConfigRegistry.Get(EnabledKey);
+                    var dc = ConfigRegistry.Get(DebugKey);
+                    LightLogger.Log($"[ConfigUIPanel.Diag] Refresh 被调用 | " +
+                                    $"enabled 值={(en == null ? "null" : en.GetBool().ToString())} | " +
+                                    $"dummyCount.VisibleWhen={(dc?.VisibleWhen == null ? "NULL_LAMBDA" : "有")} " +
+                                    $"IsVisible={dc?.IsVisible ?? false} | built=[{string.Join(",", _builtKeys)}]");
+                }
+
+                if (NeedRebuild())
+                {
+                    // ⚠️【增量优先】依赖项(如"启用调试模式")改变可见性时，
+                    //   **不要**整页销毁重建 —— 实测每次切换都会 Rebuild 一次，
+                    //   行实例计数 0→1→3→4→6→7… 无限增长。
+                    //   整页重建会重新走 ClearVanillaContent / UpdateScrollBounds /
+                    //   地图预览回收，正是"点一次配置项那块空缺又出现"和闪动的来源。
+                    //
+                    //   这里先尝试**只补/只删变化的那几行**；成功就返回，
+                    //   失败（结构对不上）才退回整页重建。
+                    if (TryIncrementalVisibility())
+                        return;
+
                     var parent = _container != null ? _container.parent : null;
                     if (parent != null)
                     {
@@ -1488,6 +1687,104 @@ namespace Light.UI.Config
             {
                 LightLogger.LogError("[ConfigUIPanel.Refresh]", ex);
             }
+        }
+
+        /// <summary>把某一行对应的驱动器刷新一次（值写回后立即同步显示）。</summary>
+        internal static void RefreshRow(OptionBehaviour behaviour)
+        {
+            try
+            {
+                if (behaviour == null) return;
+                var item = ItemOf(behaviour.GetInstanceID());
+                if (item == null) return;
+
+                // 诊断：确认这一行的值在 RefreshRow 时到底是什么
+                if (_rowRefreshLogs < 12)
+                {
+                    _rowRefreshLogs++;
+                    LightLogger.Log($"[ConfigUIPanel.Diag] RefreshRow 行 key={item.Key} " +
+                                    $"type={item.Type} value={item.Value} bool={item.GetBool()} " +
+                                    $"有驱动器={_drivers.ContainsKey(item)}");
+                }
+
+                if (_drivers.TryGetValue(item, out var drv) && drv != null)
+                    drv.RefreshVisual();
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.RefreshRow] {ex.Message}");
+            }
+        }
+
+        private static int _rowRefreshLogs;
+        private static int _bindLogs;
+        private static readonly HashSet<string> _layoutLogged = new();
+        private static readonly HashSet<string> _typeLogged = new();
+
+        /// <summary>是否需要重建：比较"应当建出的行键集合"与"已建出的行键集合"。</summary>
+        private static bool NeedRebuild()
+        {
+            bool changed = false;
+            _wantKeys.Clear();
+
+            if (_singleBlock != null)
+            {
+                CollectWantKeys(_singleBlock);
+            }
+            else
+            {
+                foreach (var block in ConfigRegistry.Blocks)
+                {
+                    if (block == null || !MatchesFilter(block)) continue;
+                    CollectWantKeys(block);
+                }
+            }
+
+            // 应当有的没建出来 → 重建
+            string? reason = null;
+            foreach (var key in _wantKeys)
+                if (!_builtKeys.Contains(key)) { changed = true; reason = $"应建却没建：{key}"; break; }
+
+            // 已建的已经不该有 → 重建
+            if (!changed)
+                foreach (var key in _builtKeys)
+                    if (!_wantKeys.Contains(key)) { changed = true; reason = $"已建却不该建：{key}"; break; }
+
+            // 诊断：只在确实要重建时打印原因（能直接指出是哪一项在反复触发）
+            if (changed && _rebuildLogs < 12)
+            {
+                _rebuildLogs++;
+                LightLogger.Log($"[ConfigUIPanel.Diag] NeedRebuild=true 原因：{reason} | " +
+                                $"want=[{string.Join(",", _wantKeys)}] built=[{string.Join(",", _builtKeys)}]");
+            }
+
+            return changed;
+        }
+
+        private static int _rebuildLogs;
+        private static int _refreshLogs;
+        private const string DebugKey = "lid.debug.dummyCount";
+        private const string EnabledKey = "lid.debug.enabled";
+
+        private static readonly HashSet<string> _wantKeys = new();
+        private static readonly HashSet<string> _builtKeys = new();
+
+        private static void CollectWantKeys(ConfigBlock block)
+        {
+            foreach (var item in block.Items)
+            {
+                if (item == null) continue;
+                if (!item.IsVisible) continue;      // 与 BuildBlock 的判定完全一致
+                _wantKeys.Add(item.Key);
+            }
+        }
+
+        /// <summary>把当前实际建出的行键记录下来（Build 末尾调用）。</summary>
+        private static void SnapshotBuiltKeys()
+        {
+            _builtKeys.Clear();
+            foreach (var kv in _drivers)
+                if (kv.Key != null) _builtKeys.Add(kv.Key.Key);
         }
 
         /// <summary>
@@ -1520,7 +1817,23 @@ namespace Light.UI.Config
 
         /// <summary>取某行对应的配置项（供原版控件的 prefix 使用）。</summary>
         internal static ConfigItem ItemOf(int instanceId)
-            => RowMap.TryGetValue(instanceId, out var it) ? it : null;
+            => ItemOf(instanceId, out var it) ? it : null;
+
+        /// <summary>带命中判定的版本（用于诊断"为什么没认出我们的行"）。</summary>
+        internal static bool ItemOf(int instanceId, out ConfigItem? item)
+        {
+            if (RowMap.TryGetValue(instanceId, out var it)) { item = it; return true; }
+            item = null;
+            return false;
+        }
+
+        /// <summary>当前行容器（诊断用）。</summary>
+        internal static Transform? CurrentContainer => _container;
+
+        /// <summary>本次会话累计实例化过多少行（诊断用，用于发现重复建行）。</summary>
+        internal static int InstantiatedCount => _instantiated;
+
+        private static int _instantiated;
 
         /// <summary>
         /// 重排所有已建行（可见性变化后调用）：只改 active 与 y，不销毁重建。
@@ -1532,7 +1845,14 @@ namespace Light.UI.Config
             {
                 if (_container == null) return;
 
-                float y = StartY;
+                // ⚠️ 必须用 StartYFor(host) 而不是裸 StartY！
+                //   Build() 用的是 StartYFor（= StartY + 地图预览高度 0.60），
+                //   而 Relayout 原来从 StartY 起算 → 比 Build 低 0.60 →
+                //   行整体下沉，顶部就空出"那块被地图占的地方"。
+                //   这正是用户报的"点击一次配置项后那块空缺又出现"，
+                //   在走增量路径（TryIncrementalVisibility → Relayout）时尤其明显。
+                var host = _hostMenu ?? _templates;
+                float y = host != null ? StartYFor(host) : StartY;
                 foreach (var block in ConfigRegistry.Blocks)
                 {
                     if (block == null || !MatchesFilter(block)) continue;
@@ -1581,6 +1901,132 @@ namespace Light.UI.Config
             foreach (var go in _spawned)
                 if (go != null && go.name == name) return go;
             return null;
+        }
+
+        /// <summary>
+        /// 【增量可见性】只处理"该建却没建"与"已建却不该建"的那几行，
+        /// 成功返回 true（调用方直接返回，不再整页重建）。
+        ///
+        /// 为什么需要它：依赖项（`visibleWhen`）一变化就会走 Refresh → NeedRebuild → Rebuild，
+        /// 而 Rebuild 会 DestroySpawned + 重走 ClearVanillaContent / 地图预览回收 /
+        /// UpdateScrollBounds。实测每次切换都整页重建一次，行实例计数
+        /// 0→1→3→4→6→7… 无限增长，也正是"点一次那块空缺又出现"的来源。
+        ///
+        /// 这里只做三件事：
+        ///   ① 销毁不该再显示的行（该行已不可见）
+        ///   ② 为刚变可见、但还没建出来的行**新建**（复用 AddConfigRow，位置稍后由 Relayout 定）
+        ///   ③ Relayout() 重排 + 更新滚动条
+        ///
+        /// 任何一步不确定（容器没了、块结构变了）就返回 false 让调用方整页重建 —— 宁慢勿错。
+        /// </summary>
+        private static bool TryIncrementalVisibility()
+        {
+            try
+            {
+                // 容器必须还在，否则无从下手
+                if (_container == null || _page == null) return false;
+
+                // ---- ① 收集"已建却不该建"的行，销毁 ----
+                var toRemove = new List<ConfigItem>();
+                foreach (var kv in _drivers)
+                {
+                    var it = kv.Key;
+                    if (it == null) continue;
+                    // 只处理**当前过滤条件下属于本页**的项；不在本页的交给整页重建
+                    if (!ItemBelongsToCurrentPage(it)) return false;
+                    if (!it.IsVisible) toRemove.Add(it);
+                }
+
+                foreach (var it in toRemove)
+                {
+                    if (_drivers.TryGetValue(it, out var drv) && drv != null)
+                    {
+                        var go = drv.gameObject;
+                        if (go != null)
+                        {
+                            RowMap.Remove(go.GetInstanceID());
+                            _spawned.Remove(go);
+                            Object.DestroyImmediate(go);
+                        }
+                    }
+                    _drivers.Remove(it);
+                    _rowCount = Mathf.Max(0, _rowCount - 1);
+                }
+
+                // ---- ② 收集"应建却没建"的行，新建 ----
+                var toAdd = new List<ConfigItem>();
+                foreach (var block in ConfigRegistry.Blocks)
+                {
+                    if (block == null || !MatchesFilter(block)) continue;
+                    foreach (var item in block.Items)
+                    {
+                        if (item == null) continue;
+                        if (!item.IsVisible) continue;
+                        if (_drivers.ContainsKey(item)) continue;   // 已经建过
+                        if (FindSpawned($"LightConfigRow_{item.Key}") != null) continue;
+                        toAdd.Add(item);
+                    }
+                }
+
+                // 新行一律先塞在 0 位置，紧接着 Relayout() 会把它们摆正
+                foreach (var item in toAdd)
+                    AddConfigRow(item, StartY);
+
+                // ---- ③ 重排 + 滚动条 ----
+                Relayout();
+                var host = _hostMenu ?? _templates;
+                if (host != null)
+                {
+                    float startY = StartYFor(host);
+                    float lastY = LastRowY();      // Relayout 后的真实末尾
+                    UpdateScrollBounds(host, startY, lastY);
+                }
+
+                SnapshotBuiltKeys();
+
+                LightLogger.Log($"[ConfigUIPanel] 增量更新可见性：+{toAdd.Count} 行 / -{toRemove.Count} 行" +
+                                $"（现共 {_drivers.Count} 行，未整页重建）");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.TryIncrementalVisibility] {ex.Message} → 退回整页重建");
+                return false;
+            }
+        }
+
+        /// <summary>该项是否属于"当前这一页"（单块模式只看那块；多块模式看过滤是否通过）。</summary>
+        private static bool ItemBelongsToCurrentPage(ConfigItem item)
+        {
+            if (item == null) return false;
+            if (_singleBlock != null) return ReferenceEquals(item.Block, _singleBlock);
+
+            var b = item.Block;
+            return b != null && MatchesFilter(b);
+        }
+
+        /// <summary>算一遍当前可见行的末尾 y（给滚动条用），与 Relayout 的推进方式保持一致。</summary>
+        private static float LastRowY()
+        {
+            // 同样必须带上地图预览的偏移，否则内容高度算少 0.60 → 滚动条判定不准
+            var host = _hostMenu ?? _templates;
+            float y = host != null ? StartYFor(host) : StartY;
+            foreach (var block in ConfigRegistry.Blocks)
+            {
+                if (block == null || !MatchesFilter(block)) continue;
+
+                bool anyVisible = false;
+                foreach (var it in block.Items) if (it.IsVisible) { anyVisible = true; break; }
+                if (!anyVisible) continue;
+
+                y -= HeaderHeight;
+                foreach (var item in block.Items)
+                {
+                    if (!item.IsVisible) continue;
+                    y -= SpacingY;
+                }
+            }
+            return y;
         }
 
         // =====================================================================
@@ -1685,7 +2131,8 @@ namespace Light.UI.Config
                     if (_item.NameColor.HasValue) title.color = _item.NameColor.Value;
                 }
 
-                if (_behaviour is ToggleOption toggle)
+                var toggle = GetToggle();
+                if (toggle != null)
                 {
                     // Bool：勾选状态就是值
                     if (toggle.CheckMark != null) toggle.CheckMark.enabled = _item.GetBool();
@@ -1693,7 +2140,24 @@ namespace Light.UI.Config
                 else
                 {
                     var valueText = GetValueText();
-                    if (valueText != null) valueText.text = _item.GetValueText();
+                    if (valueText != null)
+                    {
+                        valueText.text = _item.GetValueText();
+
+                        // 诊断：确认"数值框里显示标题"到底是同一个 TMP 还是写错了对象。
+                        // 只对数值行打一次。
+                        if (_diagLogged.Add(_item.Key))
+                        {
+                            var t = GetTitleText();
+                            bool same = t != null && t.GetInstanceID() == valueText.GetInstanceID();
+                            LightLogger.Log(
+                                $"[ConfigRowDriver.Diag] 行 {_item.Key} " +
+                                $"标题TMP={(t == null ? "null" : t.name + "#" + t.GetInstanceID())} " +
+                                $"数值TMP={valueText.name}#{valueText.GetInstanceID()} " +
+                                $"同一个={same} | 标题文字='{(t == null ? "" : t.text)}' " +
+                                $"数值文字='{valueText.text}' | path={PathOf(valueText.transform)}");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -1726,21 +2190,53 @@ namespace Light.UI.Config
             }
         }
 
-        /// <summary>取标题文本部件（三种原版行各自的字段名不同）。</summary>
+        /// <summary>取标题文本部件。
+        /// ⚠️ 不靠 `is` 判断：Instantiate 出来的对象静态类型是基类 OptionBehaviour，
+        ///    必须用 GetComponent 取真实组件，否则所有类型判断都会静默为 false。</summary>
         private TextMeshPro GetTitleText()
         {
-            if (_behaviour is ToggleOption t) return t.TitleText;
-            if (_behaviour is NumberOption n) return n.TitleText;
-            if (_behaviour is StringOption s) return s.TitleText;
+            var tog = _behaviour.GetComponent<ToggleOption>();
+            if (tog != null) return tog.TitleText;
+
+            var num = _behaviour.GetComponent<NumberOption>();
+            if (num != null) return num.TitleText;
+
+            var str = _behaviour.GetComponent<StringOption>();
+            if (str != null) return str.TitleText;
+
             return _behaviour != null ? _behaviour.GetComponentInChildren<TextMeshPro>(true) : null;
         }
 
-        /// <summary>取数值文本部件（Bool 行没有）。</summary>
+        /// <summary>取数值文本部件（Bool 行没有）。同样用 GetComponent 取真实组件。</summary>
         private TextMeshPro GetValueText()
         {
-            if (_behaviour is NumberOption n) return n.ValueText;
-            if (_behaviour is StringOption s) return s.ValueText;
+            var num = _behaviour.GetComponent<NumberOption>();
+            if (num != null) return num.ValueText;
+
+            var str = _behaviour.GetComponent<StringOption>();
+            if (str != null) return str.ValueText;
+
             return null;
+        }
+
+        /// <summary>取真实的 ToggleOption（Bool 行才有）。</summary>
+        private ToggleOption GetToggle() => _behaviour != null ? _behaviour.GetComponent<ToggleOption>() : null;
+
+        private static readonly HashSet<string> _diagLogged = new();
+
+        /// <summary>打印一个 Transform 的层级路径（诊断用）。</summary>
+        private static string PathOf(Transform t)
+        {
+            if (t == null) return "null";
+            var sb = new System.Text.StringBuilder(t.name);
+            var cur = t.parent;
+            int guard = 0;
+            while (cur != null && guard++ < 8)
+            {
+                sb.Insert(0, cur.name + "/");
+                cur = cur.parent;
+            }
+            return sb.ToString();
         }
     }
 }

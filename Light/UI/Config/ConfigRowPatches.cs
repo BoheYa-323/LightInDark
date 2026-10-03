@@ -228,9 +228,23 @@ namespace Light.UI.Config
             var item = ConfigUIPanel.ItemOf(__instance.GetInstanceID());
             if (item == null) return;
 
+            // 诊断：Toggle postfix 里 CheckMark 到底是什么状态。
+            // 原版 Toggle() 先翻转 CheckMark 再调 UpdateValue/OnValueChanged，
+            // 我们的 postfix 在其后执行，所以这里读到的应当是"翻转后"的值。
+            if (_toggleLogs < 12)
+            {
+                _toggleLogs++;
+                LightLogger.Log($"[ConfigRowPatches.Diag] TogglePostfix 行 {item.Key} " +
+                                $"CheckMark={( __instance.CheckMark == null ? "null" : __instance.CheckMark.enabled.ToString())} " +
+                                $"GetBool={__instance.GetBool()} " +
+                                $"ItemValueBefore={item.Value}");
+            }
+
             item.SetValueSilently(__instance.GetBool() ? 1f : 0f);
             AfterChange(item, __instance);
         }
+
+        private static int _toggleLogs;
 
         [HarmonyPatch(typeof(NumberOption), nameof(NumberOption.Increase))]
         [HarmonyPostfix]
@@ -295,12 +309,17 @@ namespace Light.UI.Config
         {
             try
             {
-                // 注意：这里**不再**调用原版的 UpdateValue()。
-                // 那三个 UpdateValue 已经被上面的 Prefix 对我们的行整个跳过了
-                // （它们会把值写进真实游戏规则、并且 OptionName 为 Invalid 时刷错误日志），
-                // 显示与取值一律由 ConfigRowDriver 负责，所以这里无事可做。
+                // 诊断：这一行是谁、容器里同名行有几个、会话内共实例化过几次。
+                LogRowIdentity(behaviour, "AfterChange");
 
-                // 可见性可能变了（如"启用调试模式"控制数量行）→ 同步其余行
+                // ⚠️ 顺序很关键：**先让驱动器把值同步到显示与可见性判定所依赖的状态**，
+                // 再 Refresh。否则 Refresh 里的 NeedRebuild 会读到"值还没写回"的旧状态，
+                // 判定为"应可见却没建" → 触发整页重建（实测每次点击都重建）。
+                // 显示与取值一律由 ConfigRowDriver 负责 —— 原版 UpdateValue/FixedUpdate/
+                // Initialize 已被上面的 Prefix 对我们的行跳过。
+                ConfigUIPanel.RefreshRow(behaviour);
+
+                // 可见性可能变了（如"启用调试模式"控制数量行）→ 用集合比较决定是否重建
                 ConfigUIPanel.Refresh();
 
                 ConfigSync.RaiseAndSync(item);
@@ -309,6 +328,36 @@ namespace Light.UI.Config
             {
                 LightLogger.LogError("[ConfigRowPatches.AfterChange]", ex);
             }
+        }
+
+        /// <summary>
+        /// 诊断：打印这一行的实例 ID、名字，以及容器里**同名行有几个**。
+        /// 若同名 &gt; 1，说明同一配置项被实例化了多次（重复建行）——
+        /// 那正是"复选框成对出现""点两下才生效"的根因。
+        /// </summary>
+        internal static void LogRowIdentity(OptionBehaviour behaviour, string where)
+        {
+            try
+            {
+                if (behaviour == null) return;
+                var go = behaviour.gameObject;
+
+                int duplicates = 0;
+                var container = ConfigUIPanel.CurrentContainer;
+                if (container != null)
+                {
+                    for (int i = 0; i < container.childCount; i++)
+                    {
+                        var c = container.GetChild(i);
+                        if (c != null && c.name == go.name) duplicates++;
+                    }
+                }
+
+                LightLogger.Log($"[ConfigRowPatches.Diag] {where} 行 '{go.name}' id={behaviour.GetInstanceID()} " +
+                                $"容器内同名 {duplicates} 个 | 会话内共实例化 {ConfigUIPanel.InstantiatedCount} 次" +
+                                (duplicates > 1 ? "  ← ⚠️ 重复建行！" : ""));
+            }
+            catch { }
         }
     }
 }
