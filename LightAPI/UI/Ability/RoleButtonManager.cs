@@ -135,6 +135,26 @@ namespace LightInDark.UI.Ability
             }
         }
 
+        /// <summary>释放指定职业运行时实例的全部按钮（换职业时由 RuntimeRoleTemplate.Release 调用，防止按钮残留重复）。</summary>
+        public static void ReleaseButtonsOf(RuntimeRoleTemplate role)
+        {
+            try
+            {
+                for (int i = _buttons.Count - 1; i >= 0; i--)
+                {
+                    var b = _buttons[i];
+                    if (!ReferenceEquals(b.Role, role)) continue;
+                    _buttons.RemoveAt(i);
+                    _pendingHud.Remove(b);
+                    b.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[RoleButtonManager.ReleaseButtonsOf]", ex);
+            }
+        }
+
         /// <summary>清空全部按钮（游戏结束/释放时）。</summary>
         public static void Clear()
         {

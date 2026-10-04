@@ -260,14 +260,14 @@ public static class HelpScreen
         try
         {
             var gui = LIDGUI.Instance;
-            var listed = new List<Role>();
+            var listed = new List<RoleTemplate>();
             var inner = new List<GUIWidget?>();
 
             void AddCategory(RoleCategory category, string title, Color titleColor)
             {
-                var roles = new List<Role>();
+                var roles = new List<RoleTemplate>();
                 foreach (var role in RoleRegistry.AllRoles)
-                    if (role.Category == category) roles.Add(role);
+                    if (role.RoleCategory == category) roles.Add(role);
                 if (roles.Count == 0) return;
 
                 if (inner.Count > 0) inner.Add(gui.VerticalMargin(0.2f));
@@ -316,7 +316,7 @@ public static class HelpScreen
             {
                 var name = gui.ColorTextComponent(role.Color, new RawTextComponent(role.Name)).GetString();
                 inner.Add(gui.RawButton(GUIAlignment.Center, RoleButtonAttr, name,
-                    _ => OpenAssignableHelp(new List<Role> { role }, 0)));
+                    _ => OpenAssignableHelp(new List<RoleTemplate> { role.Role }, 0)));
             }
             else
             {
@@ -385,11 +385,11 @@ public static class HelpScreen
                 return gui.VerticalHolder(GUIAlignment.Left, inner);
             }
 
-            var matched = new List<Role>();
+            var matched = new List<RoleTemplate>();
             foreach (var role in RoleRegistry.AllRoles)
             {
                 if (role.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-                    role.Description.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                    role.DescribeText.Contains(keyword, StringComparison.OrdinalIgnoreCase))
                     matched.Add(role);
             }
 
@@ -445,7 +445,7 @@ public static class HelpScreen
                 column.Add(gui.VerticalMargin(0.15f));
                 foreach (var role in RoleRegistry.AllRoles)
                 {
-                    if (role.Category != category) continue;
+                    if (role.RoleCategory != category) continue;
                     column.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard),
                         GetAllocationLine(role)));
                     column.Add(gui.VerticalMargin(0.08f));
@@ -564,7 +564,7 @@ public static class HelpScreen
     // 职业详情子窗口
     // =====================================================================
 
-    private static void OpenAssignableHelp(List<Role> roles, int index)
+    private static void OpenAssignableHelp(List<RoleTemplate> roles, int index)
     {
         try
         {
@@ -609,7 +609,7 @@ public static class HelpScreen
         }
     }
 
-    private static GUIWidget BuildRoleDetailWidget(Role role)
+    private static GUIWidget BuildRoleDetailWidget(RoleTemplate role)
     {
         try
         {
@@ -632,10 +632,10 @@ public static class HelpScreen
                     gui.ColorTextComponent(role.Color, new RawTextComponent(role.Name)).GetString()),
                 gui.VerticalMargin(0.03f),
             };
-            if (!string.IsNullOrEmpty(role.IntroBlurb))
+            if (!string.IsNullOrEmpty(role.IntroText))
             {
                 texts.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.OverlayContent),
-                    gui.ColorTextComponent(role.Color, new RawTextComponent(role.IntroBlurb)).GetString()));
+                    gui.ColorTextComponent(role.Color, new RawTextComponent(role.IntroText)).GetString()));
             }
             var textColumn = gui.VerticalHolder(GUIAlignment.Left, texts.ToArray());
 
@@ -645,8 +645,8 @@ public static class HelpScreen
             headerWidgets.Add(textColumn);
             var header = gui.HorizontalHolder(GUIAlignment.Left, headerWidgets.ToArray());
 
-            // 技能介绍：优先 SkillDescription，为空回退 Description
-            var skill = string.IsNullOrEmpty(role.SkillDescription) ? role.Description : role.SkillDescription;
+            // 技能介绍
+            var skill = role.DescribeText;
 
             return gui.VerticalHolder(GUIAlignment.Left,
                 header,
@@ -654,7 +654,7 @@ public static class HelpScreen
                 gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard), skill),
                 gui.VerticalMargin(0.1f),
                 gui.RawText(GUIAlignment.Left, attr,
-                    Language.Translate("help.role.category", "阵营") + ": " + GetCategoryName(role.Category)),
+                    Language.Translate("help.role.category", "阵营") + ": " + GetCategoryName(role.RoleCategory)),
                 gui.VerticalMargin(0.1f),
                 gui.RawText(GUIAlignment.Left, attr, GetAllocationLine(role)));
         }
@@ -677,7 +677,7 @@ public static class HelpScreen
 
     /// <summary>分配信息行（MaxCount==0 显示不参与分配）</summary>
     /// <summary>分配信息行（MaxCount==0 显示不参与分配）。</summary>
-    private static string GetAllocationLine(Role role)
+    private static string GetAllocationLine(RoleTemplate role)
     {
         try
         {

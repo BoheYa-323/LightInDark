@@ -11,7 +11,6 @@ using Light.News;
 using Light.Patches;
 using Light.Roles.Crewmates;
 using Light.Roles.Impostors;
-using Light.Roles.Vanilla;
 using LightInDark.Core;
 using LightInDark.Events;
 using LightInDark.Language;
@@ -199,10 +198,7 @@ public partial class LightPlugin : BasePlugin
     {
         try
         {
-            RoleRegistry.Register<Caller>();
-            RoleRegistry.Register<BloodThirstyKiller>();
-            RoleRegistry.Register(VanillaImpostor.Instance);
-            RoleRegistry.Register(VanillaCrewmate.Instance);
+            RoleRegistry.RegisterAssembly(typeof(LightPlugin).Assembly);
         }
         catch (Exception ex)
         {

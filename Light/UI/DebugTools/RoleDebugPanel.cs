@@ -249,7 +249,7 @@ public static class RoleDebugPanel
                 foreach (var role in all.Skip(_page * PageSize).Take(PageSize))
                 {
                     var r = role;   // 闭包捕获
-                    var label = $"{CategoryPrefix(r.Category)} {r.Name}";
+                    var label = $"{CategoryPrefix(r.RoleCategory)} {r.Name}";
 
                     // ⚠️ 注意：本模组的 Role.Color 是**自研的 LightInDark.Color 结构体**，
                     //    而 HudUIWindow.AddButton 的颜色参数正好也是 LightInDark.Color?，
@@ -289,7 +289,7 @@ public static class RoleDebugPanel
     }
 
     /// <summary>点职业 → 立即把自己换成这个职业。</summary>
-    private static void Assign(Role role)
+    private static void Assign(RoleTemplate role)
     {
         try
         {
@@ -303,7 +303,7 @@ public static class RoleDebugPanel
             }
 
             me.SetRole(role);
-            LightLogger.Log($"[RoleDebugPanel] 已切换职业 → {role.Name}（{role.CodeName} / {role.Category}）");
+            LightLogger.Log($"[RoleDebugPanel] 已切换职业 → {role.Name}（{role.CodeName} / {role.RoleCategory}）");
 
             // 刷一下"当前职业"那行
             if (_window != null) BuildContent(_window);
@@ -319,20 +319,20 @@ public static class RoleDebugPanel
     // =====================================================================
 
     /// <summary>所有已注册职业，按类别排序（内鬼 → 中立 → 船员），方便找。</summary>
-    private static List<Role> Roles()
+    private static List<RoleTemplate> Roles()
     {
         try
         {
             return RoleRegistry.AllRoles
                 .Where(r => r != null)
-                .OrderBy(r => (int)r.Category)
+                .OrderBy(r => (int)r.RoleCategory)
                 .ThenBy(r => r.CodeName, StringComparer.Ordinal)
                 .ToList();
         }
         catch (Exception ex)
         {
             LightLogger.LogWarning($"[RoleDebugPanel.Roles] {ex.Message}");
-            return new List<Role>();
+            return new List<RoleTemplate>();
         }
     }
 

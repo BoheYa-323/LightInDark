@@ -8,39 +8,49 @@ using System;
 namespace Light.Roles.Impostors;
 
 /// <summary>嗜血杀手：无冷却击杀的内鬼职业。</summary>
-public class BloodThirstyKiller : Role
+public class BloodThirstyKiller : RoleTemplate
 {
     public const string Code = "BloodThirstyKiller";
 
+    public static readonly BloodThirstyKiller MyRole = new();
+
     public override string CodeName => Code;
     public override LightInDark.Color Color => LightInDark.Color.Red;
-    public override RoleCategory Category => RoleCategory.Impostor;
-    public override string IntroBlurbKey => "BloodThirstyKiller.intro";
-    public override string SkillDescriptionKey => "BloodThirstyKiller.skill";
+    public override RoleCategory RoleCategory => RoleCategory.Impostor;
     public override AllocationParameters Allocation => new() { MaxCount = 1, Chance = 50 };
 
-    private bool _active;
+    public override RuntimeRoleTemplate CreateRuntime(PlayerControl owner)
+        => new RuntimeInstance(owner, this);
 
-    protected override void OnActivated()
+    public class RuntimeInstance : RuntimeRoleTemplate
     {
-        // 设为原版内鬼
-        var control = MyPlayer?.Control;
-        if (control == null) return;
-        RoleManager.Instance.SetRole(control, RoleTypes.Impostor);
-        // 仅本人：每帧将击杀冷却归零
-        if (!AmOwner) return;
-        _active = true;
-        Dispatcher.Instance?.StartCoroutine(CoZeroKillCooldown(control).WrapToIl2Cpp());
-    }
+        public override RoleTemplate Role => MyRole;
 
-    protected override void OnInactivated() => _active = false;
+        public RuntimeInstance(PlayerControl owner, RoleTemplate template) : base(owner, template) { }
 
-    private System.Collections.IEnumerator CoZeroKillCooldown(PlayerControl control)
-    {
-        while (_active && control != null && !control.Data.IsDead)
+        private bool _active;
+
+        protected override void OnActivated()
         {
-            if (control.killTimer > 0f) control.SetKillTimer(0f);
-            yield return null;
+            // 设为原版内鬼
+            var control = MyPlayer?.Control;
+            if (control == null) return;
+            RoleManager.Instance.SetRole(control, RoleTypes.Impostor);
+            // 仅本人：每帧将击杀冷却归零
+            if (!AmOwner) return;
+            _active = true;
+            Dispatcher.Instance?.StartCoroutine(CoZeroKillCooldown(control).WrapToIl2Cpp());
+        }
+
+        protected override void OnInactivated() => _active = false;
+
+        private System.Collections.IEnumerator CoZeroKillCooldown(PlayerControl control)
+        {
+            while (_active && control != null && !control.Data.IsDead)
+            {
+                if (control.killTimer > 0f) control.SetKillTimer(0f);
+                yield return null;
+            }
         }
     }
 }

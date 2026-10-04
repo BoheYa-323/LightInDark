@@ -37,7 +37,7 @@ namespace LightInDark.UI.Ability
         private readonly FuncHolder _holder = new();
         private readonly List<GameObject> _created = new();
 
-        private MeetingTargetButton(Role role, Player player, RoleButtonConfig config, Action onClick)
+        private MeetingTargetButton(RuntimeRoleTemplate role, Player player, RoleButtonConfig config, Action onClick)
             : base(role, player, config, onClick) { }
 
         /// <summary>
@@ -47,7 +47,7 @@ namespace LightInDark.UI.Ability
         /// <param name="canAdd">是否对该玩家添加按钮（可空，默认排除自己与死者）。</param>
         /// <param name="icon">按钮图标（可空，默认用原版 CancelButton 贴图）。</param>
         /// <param name="sfx">点击音效相对路径（可空）。</param>
-        public static MeetingTargetButton Create(Role role,
+        public static MeetingTargetButton Create(RuntimeRoleTemplate role,
             Action<MeetingHud, PlayerControl> onClick,
             Func<PlayerControl, bool> canAdd = null,
             Sprite icon = null,

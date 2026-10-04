@@ -1,166 +1,138 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using LightInDark.Configuration;
 using LightInDark.Core;
 
 namespace LightInDark.Roles
 {
     /// <summary>
-    /// 职业注册中心。在插件主类 Load() 中调用 RoleRegistry.Register() 注册职业。
-    /// 每个职业注册一个"定义实例"（MyPlayer==null），分配时经 CreateInstance 生成绑定玩家的运行时实例。
+    /// 职业注册中心。启动时扫描程序集自动发现全部 RoleTemplate 子类（加类文件即生效，无需改注册表），
+    /// 也可手动注册。每个职业全局只保留一个模板定义（约定 MyRole 单例）。
     /// </summary>
     public static class RoleRegistry
     {
-        private static readonly Dictionary<string, Role> _roles = new();
-        private static readonly Dictionary<Type, Role> _rolesByType = new();
-        private static readonly Dictionary<int, Role> _rolesById = new();
+        private static readonly Dictionary<string, RoleTemplate> _roles = new();
+        private static readonly Dictionary<Type, RoleTemplate> _rolesByType = new();
+        private static readonly Dictionary<int, RoleTemplate> _rolesById = new();
         private static int _nextId;
 
-        /// <summary>已注册的所有职业定义</summary>
-        public static IReadOnlyCollection<Role> AllRoles => _roles.Values;
+        /// <summary>已注册的所有职业模板。</summary>
+        public static IReadOnlyCollection<RoleTemplate> AllRoles => _roles.Values;
 
-        /// <summary>
-        /// 注册职业（校验 CodeName 必须重写、Intro 不可为空；不合格则拒绝并告警）。
-        /// 在插件主类 Load() 中调用。
-        /// </summary>
-        public static T Register<T>() where T : Role, new()
+        /// <summary>扫描程序集，自动注册其中全部职业模板子类。</summary>
+        public static void RegisterAssembly(Assembly assembly)
         {
             try
             {
-                return Register(new T());
+                if (assembly == null) return;
+                int count = 0;
+
+                foreach (var type in SafeGetTypes(assembly))
+                {
+                    if (!typeof(RoleTemplate).IsAssignableFrom(type)) continue;
+                    if (type.IsAbstract || !type.IsClass) continue;
+                    if (type.GetConstructor(Type.EmptyTypes) == null)
+                    {
+                        LightLogger.LogWarning($"[RoleRegistry] {type.Name} 没有无参构造，跳过自动注册");
+                        continue;
+                    }
+                    if (_rolesByType.ContainsKey(type)) continue;
+
+                    try
+                    {
+                        var template = (RoleTemplate)Activator.CreateInstance(type);
+                        if (Register(template) != null) count++;
+                    }
+                    catch (Exception ex)
+                    {
+                        LightLogger.LogError($"[RoleRegistry] 自动注册 {type.Name} 失败", ex);
+                    }
+                }
+
+                LightLogger.Log($"[RoleRegistry] {assembly.GetName().Name} 自动扫描注册职业 {count} 个");
             }
             catch (Exception ex)
             {
-                LightLogger.LogError("RoleRegistry.Register", ex);
-                return default;
+                LightLogger.LogError("RoleRegistry.RegisterAssembly", ex);
             }
         }
 
-        /// <summary>
-        /// 注册职业实例。校验失败（CodeName 为空、已注册、或 Intro 为空）时拒绝注册并返回 default。
-        /// </summary>
-        public static T Register<T>(T role) where T : Role
+        /// <summary>注册职业模板（CodeName 为空或重复时拒绝）。返回注册后的模板，失败返回 null。</summary>
+        public static RoleTemplate Register(RoleTemplate role)
         {
             try
             {
                 if (!IsValid(role, out string reason))
                 {
                     LightLogger.LogWarning($"拒绝注册职业 {role?.CodeName ?? "null"}：{reason}");
-                    return default;
+                    return null;
                 }
 
                 role.Id = _nextId++;
                 _roles[role.CodeName] = role;
-                _rolesByType[typeof(T)] = role;
+                _rolesByType[role.GetType()] = role;
                 _rolesById[role.Id] = role;
+
+                if (string.IsNullOrEmpty(role.IntroText))
+                    LightLogger.LogWarning($"[RoleRegistry] {role.CodeName} 的开场白翻译缺失（role.{role.CodeName}.intro）");
 
                 return role;
             }
             catch (Exception ex)
             {
-                LightLogger.LogError("RoleRegistry.Register<T>", ex);
-                return default;
+                LightLogger.LogError("RoleRegistry.Register", ex);
+                return null;
             }
         }
 
-        /// <summary>
-        /// 尝试注册职业，返回是否成功。
-        /// </summary>
-        /// <param name="logPrefix">错误日志前缀，默认 "{CodeName} 注册失败"。</param>
-        /// <param name="includeStackTrace">是否输出异常堆栈（默认 true，等效 LightLogger.LogError(msg, ex)）。</param>
-        public static bool TryRegister<T>(string logPrefix = null, bool includeStackTrace = true)
-            where T : Role, new()
+        private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
         {
-            try
-            {
-                var role = new T();
-                if (!IsValid(role, out string reason))
-                {
-                    string msg = $"{logPrefix ?? $"{role.CodeName} 注册失败"}：{reason}";
-                    if (includeStackTrace) LightLogger.LogError(msg, new InvalidOperationException(reason));
-                    else LightLogger.LogError(msg);
-                    return false;
-                }
-                Register(role);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                string msg = logPrefix ?? "职业注册失败";
-                if (includeStackTrace) LightLogger.LogError(msg, ex);
-                else LightLogger.LogError(msg);
-                return false;
-            }
+            try { return assembly.GetTypes(); }
+            catch (ReflectionTypeLoadException ex) { return ex.Types.Where(t => t != null); }
+            catch { return Array.Empty<Type>(); }
         }
 
-        /// <summary>校验职业：CodeName 必须非空，Intro 必须非 null/空，CodeName 不得重复。</summary>
-        private static bool IsValid(Role role, out string reason)
+        /// <summary>校验：CodeName 必须非空且不重复。</summary>
+        private static bool IsValid(RoleTemplate role, out string reason)
         {
             reason = null;
             if (role == null) { reason = "role 为 null"; return false; }
             if (string.IsNullOrEmpty(role.CodeName)) { reason = "必须重写 CodeName（内部名）"; return false; }
             if (_roles.ContainsKey(role.CodeName)) { reason = $"CodeName 已注册：{role.CodeName}"; return false; }
-            if (string.IsNullOrEmpty(role.IntroBlurb)) { reason = $"Intro（开场白）为空，职业 {role.CodeName} 必须重写 IntroBlurbKey 且译文中译本不可为空"; return false; }
             return true;
         }
 
-        /// <summary>按 CodeName（内部名）获取职业定义</summary>
-        public static Role GetByName(string name)
+        /// <summary>按 CodeName 获取职业模板。</summary>
+        public static RoleTemplate GetByName(string name)
         {
-            try
-            {
-                return _roles.TryGetValue(name, out var role) ? role : null;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleRegistry.GetByName", ex);
-                return null;
-            }
+            try { return _roles.TryGetValue(name, out var role) ? role : null; }
+            catch (Exception ex) { LightLogger.LogError("RoleRegistry.GetByName", ex); return null; }
         }
 
-        /// <summary>按类型获取职业定义</summary>
-        public static T Get<T>() where T : Role
+        /// <summary>按类型获取职业模板。</summary>
+        public static T Get<T>() where T : RoleTemplate
         {
-            try
-            {
-                return _rolesByType.TryGetValue(typeof(T), out var role) ? role as T : null;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleRegistry.Get", ex);
-                return default;
-            }
+            try { return _rolesByType.TryGetValue(typeof(T), out var role) ? role as T : null; }
+            catch (Exception ex) { LightLogger.LogError("RoleRegistry.Get", ex); return null; }
         }
 
-        /// <summary>按注册序号获取职业定义</summary>
-        public static Role GetById(int id)
+        /// <summary>按注册序号获取职业模板。</summary>
+        public static RoleTemplate GetById(int id)
         {
-            try
-            {
-                return _rolesById.TryGetValue(id, out var role) ? role : null;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleRegistry.GetById", ex);
-                return null;
-            }
+            try { return _rolesById.TryGetValue(id, out var role) ? role : null; }
+            catch (Exception ex) { LightLogger.LogError("RoleRegistry.GetById", ex); return null; }
         }
 
-        /// <summary>职业是否已注册</summary>
+        /// <summary>职业是否已注册。</summary>
         public static bool IsRegistered(string name)
         {
-            try
-            {
-                return _roles.ContainsKey(name);
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleRegistry.IsRegistered", ex);
-                return default;
-            }
+            try { return _roles.ContainsKey(name); }
+            catch (Exception ex) { LightLogger.LogError("RoleRegistry.IsRegistered", ex); return false; }
         }
 
-        /// <summary>清空所有注册（游戏结束时调用）</summary>
+        /// <summary>清空所有注册。</summary>
         public static void Clear()
         {
             try
@@ -178,107 +150,41 @@ namespace LightInDark.Roles
     }
 
     /// <summary>
-    /// 职业类型检查扩展。使用方式：player.Is&lt;Caller&gt;()
-    /// 或 player.HasRole&lt;Caller&gt;()
+    /// 职业类型检查扩展。用法：player.HasRole&lt;Caller&gt;()
     /// </summary>
     public static class RoleTypeChecker
     {
-        /// <summary>检查玩家是否拥有指定类型的职业</summary>
-        public static bool HasRole<T>(this Game.Player player) where T : Role
+        /// <summary>检查玩家是否拥有指定模板类型的职业</summary>
+        public static bool HasRole<T>(this Game.Player player) where T : RoleTemplate
         {
-            try
-            {
-                return player.Role is T;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.HasRole", ex);
-                return default;
-            }
+            try { return player.Role?.Role is T; }
+            catch (Exception ex) { LightLogger.LogError("RoleTypeChecker.HasRole", ex); return false; }
         }
 
-        /// <summary>获取玩家的指定类型职业实例（如果存在）</summary>
-        public static T GetRole<T>(this Game.Player player) where T : Role
+        /// <summary>获取玩家的运行时实例（模板类型匹配时）</summary>
+        public static RuntimeRoleTemplate GetRoleRuntime<T>(this Game.Player player) where T : RoleTemplate
         {
-            try
-            {
-                return player.Role as T;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.GetRole", ex);
-                return default;
-            }
+            try { return player.Role?.Role is T ? player.Role : null; }
+            catch (Exception ex) { LightLogger.LogError("RoleTypeChecker.GetRoleRuntime", ex); return null; }
         }
 
         /// <summary>检查玩家是否为指定类别</summary>
         public static bool IsCategory(this Game.Player player, RoleCategory category)
         {
-            try
-            {
-                return player.Role?.Category == category;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.IsCategory", ex);
-                return default;
-            }
+            try { return player.RoleCategory == category; }
+            catch (Exception ex) { LightLogger.LogError("RoleTypeChecker.IsCategory", ex); return false; }
         }
 
         /// <summary>检查玩家是否为船员</summary>
-        public static bool IsCrewmate(this Game.Player player)
-        {
-            try
-            {
-                return player.IsCategory(RoleCategory.Crewmate);
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.IsCrewmate", ex);
-                return default;
-            }
-        }
+        public static bool IsCrewmate(this Game.Player player) => player.IsCategory(RoleCategory.Crewmate);
 
         /// <summary>检查玩家是否为内鬼</summary>
-        public static bool IsImpostor(this Game.Player player)
-        {
-            try
-            {
-                return player.IsCategory(RoleCategory.Impostor);
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.IsImpostor", ex);
-                return default;
-            }
-        }
+        public static bool IsImpostor(this Game.Player player) => player.IsCategory(RoleCategory.Impostor);
 
         /// <summary>检查玩家是否为中立</summary>
-        public static bool IsNeutral(this Game.Player player)
-        {
-            try
-            {
-                return player.IsCategory(RoleCategory.Neutral);
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.IsNeutral", ex);
-                return default;
-            }
-        }
+        public static bool IsNeutral(this Game.Player player) => player.IsCategory(RoleCategory.Neutral);
 
         /// <summary>检查玩家是否存活且有职业</summary>
-        public static bool IsAliveWithRole(this Game.Player player)
-        {
-            try
-            {
-                return !player.IsDead && player.HasRole;
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogError("RoleTypeChecker.IsAliveWithRole", ex);
-                return default;
-            }
-        }
+        public static bool IsAliveWithRole(this Game.Player player) => !player.IsDead && player.HasRole;
     }
 }

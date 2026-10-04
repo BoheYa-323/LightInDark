@@ -9,19 +9,19 @@ namespace LightInDark.Events
     /// <summary>自定义职业被设置到玩家时触发。</summary>
     public class RoleAssignedEvent : BasePlayerEvent
     {
-        public Role Role { get; init; }
+        public RoleTemplate Role { get; init; }
         public int[] Arguments { get; init; } = System.Array.Empty<int>();
         public RoleAssignedEvent() { }
-        public RoleAssignedEvent(PlayerControl player, Role role, int[] arguments = null) : base(player) { Role = role; Arguments = arguments ?? System.Array.Empty<int>(); }
+        public RoleAssignedEvent(PlayerControl player, RoleTemplate role, int[] arguments = null) : base(player) { Role = role; Arguments = arguments ?? System.Array.Empty<int>(); }
     }
 
     /// <summary>换职前触发（可阻止）。</summary>
     public class PlayerTryToChangeRoleEvent : BaseCancelablePlayerEvent
     {
-        public Role OldRole { get; init; }
-        public Role NewRole { get; init; }
+        public RuntimeRoleTemplate OldRole { get; init; }
+        public RoleTemplate NewRole { get; init; }
         public PlayerTryToChangeRoleEvent() { }
-        public PlayerTryToChangeRoleEvent(PlayerControl player, Role oldRole, Role newRole) : base(player) { OldRole = oldRole; NewRole = newRole; }
+        public PlayerTryToChangeRoleEvent(PlayerControl player, RuntimeRoleTemplate oldRole, RoleTemplate newRole) : base(player) { OldRole = oldRole; NewRole = newRole; }
     }
 
     /// <summary>分配确定前触发（供分配机修正分配表）。</summary>
@@ -34,9 +34,9 @@ namespace LightInDark.Events
     /// <summary>职业已设置到玩家时触发。</summary>
     public class PlayerRoleSetEvent : BasePlayerEvent
     {
-        public Role Role { get; init; }
+        public RuntimeRoleTemplate Role { get; init; }
         public PlayerRoleSetEvent() { }
-        public PlayerRoleSetEvent(PlayerControl player, Role role) : base(player) { Role = role; }
+        public PlayerRoleSetEvent(PlayerControl player, RuntimeRoleTemplate role) : base(player) { Role = role; }
     }
 
     /// <summary>职业交换时触发。</summary>
@@ -46,10 +46,10 @@ namespace LightInDark.Events
 
         public PlayerControl Source { get; init; }
         public PlayerControl Destination => Player;
-        public Role Role { get; init; }
+        public RuntimeRoleTemplate Role { get; init; }
         public SwapType Type { get; init; }
         public PlayerRoleSwapEvent() { }
-        public PlayerRoleSwapEvent(PlayerControl source, PlayerControl destination, Role role, SwapType type) : base(destination)
+        public PlayerRoleSwapEvent(PlayerControl source, PlayerControl destination, RuntimeRoleTemplate role, SwapType type) : base(destination)
         { Source = source; Role = role; Type = type; }
     }
 

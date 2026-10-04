@@ -44,7 +44,7 @@ namespace LightInDark.Roles
         {
             try
             {
-                return AllPlayers().Where(p => p.Role?.Category == category);
+                return AllPlayers().Where(p => p.Role?.RoleCategory == category);
             }
             catch (Exception ex)
             {
@@ -54,13 +54,13 @@ namespace LightInDark.Roles
         }
 
         /// <summary>存活的内鬼玩家。</summary>
-        public static IEnumerable<Player> AliveImpostors() => AlivePlayers().Where(p => p.Role?.Category == RoleCategory.Impostor);
+        public static IEnumerable<Player> AliveImpostors() => AlivePlayers().Where(p => p.Role?.RoleCategory == RoleCategory.Impostor);
 
         /// <summary>存活的船员玩家。</summary>
-        public static IEnumerable<Player> AliveCrewmates() => AlivePlayers().Where(p => p.Role?.Category == RoleCategory.Crewmate);
+        public static IEnumerable<Player> AliveCrewmates() => AlivePlayers().Where(p => p.Role?.RoleCategory == RoleCategory.Crewmate);
 
         /// <summary>存活的独立（中立）玩家。</summary>
-        public static IEnumerable<Player> AliveNeutrals() => AlivePlayers().Where(p => p.Role?.Category == RoleCategory.Neutral);
+        public static IEnumerable<Player> AliveNeutrals() => AlivePlayers().Where(p => p.Role?.RoleCategory == RoleCategory.Neutral);
 
         /// <summary>按 PlayerId 获取玩家。</summary>
         public static Player GetPlayerById(byte playerId)
@@ -153,11 +153,11 @@ namespace LightInDark.Roles
             => p?.Control != null && p.Control.Data != null && !p.Control.Data.IsDead;
 
         /// <summary>玩家是否拥有指定职业。</summary>
-        public static bool HasRole<T>(Player p) where T : Role
+        public static bool HasRole<T>(Player p) where T : RoleTemplate
         {
             try
             {
-                return p?.Role is T;
+                return p?.Role?.Role is T;
             }
             catch (Exception ex)
             {
@@ -166,12 +166,12 @@ namespace LightInDark.Roles
             }
         }
 
-        /// <summary>玩家的指定职业实例（无则 null）。</summary>
-        public static T GetRole<T>(Player p) where T : Role
+        /// <summary>玩家的指定职业定义（无则 null）。</summary>
+        public static T GetRole<T>(Player p) where T : RoleTemplate
         {
             try
             {
-                return p?.Role as T;
+                return p?.Role?.Role as T;
             }
             catch (Exception ex)
             {

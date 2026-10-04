@@ -18,7 +18,7 @@ namespace LightInDark.UI.Ability
     /// </summary>
     public abstract class RoleButtonBase : ILifespan, IGameOperator, IReleasable
     {
-        protected readonly Role _role;
+        protected readonly RuntimeRoleTemplate _role;
         protected readonly Player _player;
         protected readonly RoleButtonConfig _config;
         protected Action _onClick;
@@ -29,7 +29,7 @@ namespace LightInDark.UI.Ability
         protected bool _hudActive = true;
         protected int _usesLeft;
 
-        protected RoleButtonBase(Role role, Player player, RoleButtonConfig config, Action onClick)
+        protected RoleButtonBase(RuntimeRoleTemplate role, Player player, RoleButtonConfig config, Action onClick)
         {
             _role = role;
             _player = player;
@@ -38,8 +38,8 @@ namespace LightInDark.UI.Ability
             _usesLeft = _config.MaxUses;
         }
 
-        /// <summary>所属职业。</summary>
-        public Role Role => _role;
+        /// <summary>所属职业运行时实例。</summary>
+        public RuntimeRoleTemplate Role => _role;
 
         /// <summary>绑定的玩家。</summary>
         public Player MyPlayer => _player;
@@ -135,6 +135,7 @@ namespace LightInDark.UI.Ability
                 }
                 UpdateVisibility();
                 UpdateUsability();
+                UpdateCooldownDisplay();
                 UpdateHotkey();
             }
             catch (Exception ex)
@@ -147,6 +148,35 @@ namespace LightInDark.UI.Ability
         protected virtual void OnCooldownFinished()
         {
             PlayCooldownReadySFX();
+            // 清掉残留的进度遮罩与倒计时数字
+            var action = Button;
+            if (action != null)
+            {
+                try
+                {
+                    action.SetCooldownFill(0f);
+                    if (action.cooldownTimerText != null)
+                        action.cooldownTimerText.gameObject.SetActive(false);
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>克隆体上的 ActionButton（无则为 null）。</summary>
+        protected ActionButton Button
+            => _gameObject != null ? _gameObject.GetComponent<ActionButton>() : null;
+
+        /// <summary>
+        /// 刷新冷却显示（进度遮罩 + 倒计时数字）。
+        /// 子类可覆写以自定义 CD 表现（如持续效果期间改显效果时长）。
+        /// </summary>
+        protected virtual void UpdateCooldownDisplay()
+        {
+            if (!_inCooldown || _config.Cooldown <= 0f) return;
+            var action = Button;
+            if (action == null) return;
+            try { action.SetCoolDown(_cooldownTimer, _config.Cooldown); }
+            catch (Exception ex) { LightLogger.LogWarning($"[RoleButton] 冷却显示失败: {ex.Message}"); }
         }
 
         /// <summary>开始冷却。</summary>
@@ -154,6 +184,10 @@ namespace LightInDark.UI.Ability
         {
             _cooldownTimer = _config.Cooldown;
             _inCooldown = _config.Cooldown > 0f;
+            if (!_inCooldown) return;
+            var action = Button;
+            if (action?.cooldownTimerText != null)
+                action.cooldownTimerText.gameObject.SetActive(true);
         }
 
         /// <summary>立即结束冷却。</summary>

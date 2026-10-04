@@ -105,37 +105,39 @@ namespace Light.Patches
     [HarmonyPatch(typeof(RoleManager), nameof(RoleManager.SelectRoles))]
     public static class RoleSelectPatch
     {
-        public static bool Prefix(RoleManager __instance)
+        /// <summary>
+        /// 在原版 SelectRoles 之后执行：以原版实际选出的内鬼为准做自定义职业分配。
+        /// 这样自定义内鬼职业必然落在原版内鬼身上，阵营展示/击杀按钮/队友列表都正确，
+        /// 也避免原版随后把职业的底色职业覆盖掉（旧写法在 Prefix 里分配会被原版覆盖）。
+        /// </summary>
+        public static void Postfix()
         {
             try
             {
-                LightLogger.Log("[Patch] 拦截 SelectRoles，开始自定义分配");
-                // 先初始化玩家数据（角色分配时玩家已生成），保证 RpcDefinitions.SetRole 能记录到角色
+                // 初始化玩家数据（所有执行 SelectRoles 的客户端都要初始化）
                 LightInDark.Game.LightPlayerDataManager.Initialize();
                 LightInDark.Game.GameManager.Instance.Initialize();
+
+                if (!AmongUsClient.Instance.AmHost) return;   // 分配只在主机做，经 RPC 同步
+
+                LightLogger.Log("[Patch] 原版分配完成，开始自定义职业分配");
                 EventTriggers.OnRoleSelectionBegin(PlayerControl.AllPlayerControls?.Count ?? 0);
 
-                // 复制到系统 List 并洗牌（AllPlayerControls 不支持 System.Linq）
-                var players = new List<PlayerControl>();
-                foreach (var pc in PlayerControl.AllPlayerControls) players.Add(pc);
-                for (int i = players.Count - 1; i > 0; i--)
+                var impostors = new List<byte>();
+                var others = new List<byte>();
+                foreach (var pc in PlayerControl.AllPlayerControls)
                 {
-                    int j = UnityEngine.Random.Range(0, i + 1);
-                    (players[i], players[j]) = (players[j], players[i]);
+                    if (pc?.Data?.Role != null && pc.Data.Role.IsImpostor)
+                        impostors.Add(pc.PlayerId);
+                    else
+                        others.Add(pc.PlayerId);
                 }
 
-                int impNum = Mathf.Clamp(GameOptionsManager.Instance.CurrentGameOptions.NumImpostors, 1, Mathf.Max(1, players.Count - 1));
-                var impostorsSet = players.Take(impNum).Select(p => p.PlayerId).ToHashSet();
-                var impostors = players.Take(impNum).Select(p => p.PlayerId).ToList();
-                var others = players.Skip(impNum).Select(p => p.PlayerId).ToList();
-
                 new StandardRoleAllocator().Assign(impostors, others);
-                // 只分配自定义职业，原版 SelectRoles 继续运行处理兜底
-                return true;
             }
-            catch (System.Exception)
+            catch (System.Exception ex)
             {
-                return true;
+                LightLogger.LogError("[RoleSelectPatch.Postfix]", ex);
             }
         }
     }
