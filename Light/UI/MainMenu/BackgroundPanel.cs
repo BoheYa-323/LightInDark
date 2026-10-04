@@ -378,7 +378,7 @@ public class BackgroundPanel
 
         // ---- 标题 ----
         // width 必须给：左对齐 TMP 是从矩形左边缘开始画的（见 MakeText 注释）
-        MakeText(root, "Title", "更换背景图", new Vector3(-4.55f, 2.66f, -0.1f),
+        MakeText(root, "Title", "背景图设置", new Vector3(-4.55f, 2.66f, -0.1f),
             Vector3.one, 1.7f, FontStyles.Bold, TextAlignmentOptions.Left, GlowWhite, width: 5.0f);
 
         // 右上角操作提示（原 0.8 太小，用户看不清）

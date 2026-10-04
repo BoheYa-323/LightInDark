@@ -34,7 +34,7 @@ public static class AppearanceSettings
     public static string Selected = "";
     public static int Fit;
     public static int Dim;
-    public static bool HideCrewmates;
+    public static bool HideCrewmates = true;
     /// <summary>视频音量百分比 0~100（步长 10）。</summary>
     public static int VideoVolumePercent = 100;
 
