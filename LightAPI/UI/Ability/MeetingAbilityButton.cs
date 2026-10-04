@@ -35,11 +35,11 @@ namespace LightInDark.UI.Ability
         /// <summary>按钮旋转（默认 0）。</summary>
         public Quaternion Rotation { get; set; } = Quaternion.identity;
 
-        private MeetingAbilityButton(Role role, Player player, RoleButtonConfig config, Action onClick)
+        private MeetingAbilityButton(RuntimeRoleTemplate role, Player player, RoleButtonConfig config, Action onClick)
             : base(role, player, config, onClick) { }
 
         /// <summary>创建会议右下角按钮并注册到管理器。</summary>
-        public static MeetingAbilityButton Create(Role role, RoleButtonConfig config, Action onClick)
+        public static MeetingAbilityButton Create(RuntimeRoleTemplate role, RoleButtonConfig config, Action onClick)
         {
             try
             {

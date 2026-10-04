@@ -198,6 +198,29 @@ public class PatchManager
                         __instance.freeChatField.Clear();
                         return false;
                     }
+                case "/up":
+                    try
+                    {
+                        if (parts.Length < 2)
+                        {
+                            SendLocalMessage("用法: /up <职业名> （预定下一局强制分配的职业，支持内部名/中文显示名）\n/up 取消");
+                            __instance.freeChatField.Clear();
+                            return false;
+                        }
+                        string arg = string.Join(' ', parts.Skip(1));
+                        if (arg is "取消" or "cancel")
+                            RpcDefinitions.CancelPinnedRole(PlayerControl.LocalPlayer.PlayerId);
+                        else
+                            RpcDefinitions.RequestPinnedRole(PlayerControl.LocalPlayer.PlayerId, arg);
+                        __instance.freeChatField.Clear();
+                        return false;
+                    }
+                    catch (Exception ex)
+                    {
+                        LightLogger.LogWarning($"/up 指令失败:{ex.Message}");
+                        __instance.freeChatField.Clear();
+                        return false;
+                    }
                 case "/autosave":
                     try
                     {

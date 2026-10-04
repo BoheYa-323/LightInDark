@@ -4,12 +4,14 @@ using System.Linq;
 using LightInDark.Configuration;
 using LightInDark.Events;
 using LightInDark.Roles;
-using Light.Roles.Vanilla;
+using LightInDark.RPCs;
+using Light.Roles.Crewmates;
+using Light.Roles.Impostors;
 using LightInDark.Core;
 
 namespace Light.Roles.Assignment;
 
-/// <summary>标准职业分配器：按内鬼→中立→船员顺序抽选自定义职业，剩余玩家兜底原版职业</summary>
+/// <summary>标准职业分配器：按内鬼→中立→船员顺序抽选自定义职业，剩余玩家兜底普通职业</summary>
 public class StandardRoleAllocator : IRoleAllocator
 {
     private static readonly System.Random Rng = new();
@@ -25,16 +27,24 @@ public class StandardRoleAllocator : IRoleAllocator
         {
             var table = new RoleTable();
 
-            // 内鬼 → 中立 → 船员，依次抽选自定义职业
-            Roll(table, impostors, BuildPool(RoleCategory.Impostor), MaxImpostorRoles);
-            Roll(table, others, BuildPool(RoleCategory.Neutral), MaxNeutralRoles);
+            // /up 预定优先：先消耗各类别名额（职业未开启→忽略；名额满→预定保留到下局）
+            int usedImp = AssignPinned(table, impostors, RoleCategory.Impostor, MaxImpostorRoles);
+            int usedNeu = AssignPinned(table, others, RoleCategory.Neutral, MaxNeutralRoles);
+            int usedCrew = AssignPinned(table, others, RoleCategory.Crewmate, MaxCrewmateRoles);
+
+            // 内鬼 → 中立 → 船员，依次抽选自定义职业（扣除预定已用名额）
+            Roll(table, impostors, BuildPool(RoleCategory.Impostor), MaxImpostorRoles, usedImp);
+            Roll(table, others, BuildPool(RoleCategory.Neutral), MaxNeutralRoles, usedNeu);
 
             var neutralIds = table.GetPlayers(RoleCategory.Neutral).Select(p => p.PlayerId).ToHashSet();
             var crew = others.Where(p => !neutralIds.Contains(p)).ToList();
-            Roll(table, crew, BuildPool(RoleCategory.Crewmate), MaxCrewmateRoles);
+            Roll(table, crew, BuildPool(RoleCategory.Crewmate), MaxCrewmateRoles, usedCrew);
 
-            // 兜底：未分配到自定义职业的玩家由原版 SelectRoles 处理
-            // 不再强制分配 VanillaImpostor/VanillaCrewmate
+            // 兜底：未分配自定义职业的玩家给普通职业模板（内鬼→普通内鬼，其他→普通船员）
+            foreach (var pid in impostors)
+                if (!table.HasRole(pid)) table.SetRole(pid, Impostor.MyRole);
+            foreach (var pid in others)
+                if (!table.HasRole(pid)) table.SetRole(pid, Crewmate.MyRole);
 
             EventTriggers.OnPreFixAssignment(table);
             table.Determine();
@@ -45,19 +55,45 @@ public class StandardRoleAllocator : IRoleAllocator
         }
     }
 
-    /// <summary>构建某类别的抽选池（仅参与分配且配置最大数量>0 的职业）</summary>
-    private List<Role> BuildPool(RoleCategory category)
-        => RoleRegistry.AllRoles.Where(r => r.Category == category && GetMaxCount(r) > 0).ToList();
+    /// <summary>
+    /// 分配 /up 预定：只处理阵营匹配且已开启的职业。
+    /// 名额已满时预定保留到下局；返回本类别已被预定占用的名额。
+    /// </summary>
+    private int AssignPinned(RoleTable table, List<byte> players, RoleCategory category, int cap)
+    {
+        int used = 0;
+        foreach (var pid in players)
+        {
+            if (used >= cap) break;
+            if (!LightInDark.Roles.Assignment.RolePinManager.TryGetPin(pid, out var role)) continue;
+            if (role.RoleCategory != category) continue;      // 阵营不符：预定保留，不消耗
+            if (GetMaxCount(role) <= 0)
+            {
+                // 预定后职业被房主关闭：消耗预定并告知
+                LightInDark.Roles.Assignment.RolePinManager.Consume(pid);
+                RpcDefinitions.ShowSystemMessage(pid, $"预定职业「{role.Name}」未开启，已忽略");
+                continue;
+            }
+            table.SetRole(pid, role);
+            LightInDark.Roles.Assignment.RolePinManager.Consume(pid);
+            used++;
+        }
+        return used;
+    }
 
-    /// <summary>抽选：先保证必出职业，再按概率补足，直到达到本类别数量上限</summary>
-    private void Roll(RoleTable table, List<byte> players, List<Role> pool, int globalMax)
+    /// <summary>构建某类别的抽选池（可分配且配置最大数量>0 的职业）</summary>
+    private List<RoleTemplate> BuildPool(RoleCategory category)
+        => RoleRegistry.AllRoles.Where(r => r.RoleCategory == category && r.CanBeAssigned && GetMaxCount(r) > 0).ToList();
+
+    /// <summary>抽选：先保证必出职业，再按概率补足，直到达到本类别数量上限（preAssigned 为预定已占用数）</summary>
+    private void Roll(RoleTable table, List<byte> players, List<RoleTemplate> pool, int globalMax, int preAssigned = 0)
     {
         try
         {
-            if (pool.Count == 0 || players.Count == 0) return;
+            if (pool.Count == 0 || players.Count == 0 || preAssigned >= globalMax) return;
 
             var candidates = players.OrderBy(_ => Rng.Next()).ToList();
-            int assigned = 0;
+            int assigned = preAssigned;
 
             // 必出职业优先分配（数量由配置/默认决定）
             foreach (var role in pool.Where(r => r.Allocation.GuaranteedCount > 0))
@@ -90,7 +126,7 @@ public class StandardRoleAllocator : IRoleAllocator
     }
 
     /// <summary>按概率从池中抽选一个职业，未命中返回 null（概率由配置/默认决定）</summary>
-    private Role PickByChance(List<Role> pool)
+    private RoleTemplate PickByChance(List<RoleTemplate> pool)
     {
         try
         {
@@ -106,7 +142,7 @@ public class StandardRoleAllocator : IRoleAllocator
     }
 
     /// <summary>读取职业最大数量：优先读配置 role.&lt;CodeName&gt;.count，无配置时回退 Allocation 默认。</summary>
-    public static int GetMaxCount(Role role)
+    public static int GetMaxCount(RoleTemplate role)
     {
         var item = ConfigRegistry.Get($"role.{role.CodeName}.count");
         if (item != null) return item.GetInt();
@@ -114,7 +150,7 @@ public class StandardRoleAllocator : IRoleAllocator
     }
 
     /// <summary>读取职业分配概率：优先读配置 role.&lt;CodeName&gt;.chance，无配置时回退 Allocation 默认。</summary>
-    public static int GetChance(Role role)
+    public static int GetChance(RoleTemplate role)
     {
         var item = ConfigRegistry.Get($"role.{role.CodeName}.chance");
         if (item != null) return item.GetInt();

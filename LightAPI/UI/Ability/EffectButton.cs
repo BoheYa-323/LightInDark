@@ -52,11 +52,11 @@ namespace LightInDark.UI.Ability
         /// <summary>是否在效果中显示倒计时（默认 true）。</summary>
         public bool ShowEffectCountdown { get; set; } = true;
 
-        protected EffectButton(Role role, Player player, RoleButtonConfig config, Action onClick)
+        protected EffectButton(RuntimeRoleTemplate role, Player player, RoleButtonConfig config, Action onClick)
             : base(role, player, config, onClick) { }
 
         /// <summary>创建持续按钮并注册到管理器。</summary>
-        public static new EffectButton Create(Role role, RoleButtonConfig config, Action onClick)
+        public static new EffectButton Create(RuntimeRoleTemplate role, RoleButtonConfig config, Action onClick)
         {
             try
             {

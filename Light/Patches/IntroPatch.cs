@@ -43,16 +43,24 @@ public static class IntroPatch
             var role = LightGameManager.Instance?.LocalPlayer?.Role;
             if (role == null) yield break;
 
-            // ── 1. 开场白文本：非空则替换（空则保持原版文案）──
-            if (__instance.RoleBlurbText != null && !string.IsNullOrEmpty(role.IntroBlurb))
+            // ── 1. 职业名：替换原版职业名（原版显示的是底色职业名，如“内鬼”）──
+            if (__instance.RoleText != null)
+            {
+                __instance.RoleText.text = role.Name;
+                __instance.RoleText.color = LightInDark.ColorHelper.ToUnityColor(role.Color);
+                __instance.RoleText.gameObject.SetActive(true);
+            }
+
+            // ── 2. 开场白文本：非空则替换（空则保持原版文案）──
+            if (__instance.RoleBlurbText != null && !string.IsNullOrEmpty(role.IntroText))
             {
                 var blurb = __instance.RoleBlurbText;
-                blurb.text = role.IntroBlurb;
+                blurb.text = role.IntroText;
                 blurb.color = LightInDark.ColorHelper.ToUnityColor(role.Color);
                 blurb.gameObject.SetActive(true);
             }
 
-            // ── 2. 开场音效：IntroSFX 非空且资源存在则替换原版音效；否则不改，让原版音效播放 ──
+            // ── 3. 开场音效：IntroSFX 非空且资源存在则替换原版音效；否则不改，让原版音效播放 ──
             if (!string.IsNullOrEmpty(role.IntroSFX) && SfxManager.ResourceExists(role.IntroSFX))
             {
                 // 先停掉原版职业开场音效（原版在 YouAreText 出现前播放 Role.IntroSound）

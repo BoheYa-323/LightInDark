@@ -15,7 +15,7 @@ namespace LightInDark.Game
         bool IsLocal { get; }
         string Name { get; }
         Vector2 Position { get; }
-        Role Role { get; }
+        RuntimeRoleTemplate Role { get; }
     }
 
     public interface IBindPlayer
@@ -36,7 +36,7 @@ namespace LightInDark.Game
         public bool IsLocal => Control == PlayerControl.LocalPlayer;
         public string Name => Control?.Data?.PlayerName ?? "Unknown";
         public Vector2 Position => Control?.transform?.position ?? Vector2.zero;
-        public Role Role { get; internal set; }
+        public RuntimeRoleTemplate Role { get; internal set; }
 
         public Player MyPlayer => this;
         public bool AmOwner => IsLocal;
@@ -71,7 +71,7 @@ namespace LightInDark.Game
         }
 
         // ---- 角色 ----
-        public RoleCategory? RoleCategory => Role?.Category;
+        public RoleCategory? RoleCategory => Role?.RoleCategory;
 
         public Player(PlayerControl control)
         {
@@ -89,7 +89,7 @@ namespace LightInDark.Game
         /// <summary>
         /// 切换角色（本地立即切换，并发送RPC同步）
         /// </summary>
-        public void SetRole(Role newRole, int[] arguments = null)
+        public void SetRole(RoleTemplate newRole, int[] arguments = null)
         {
             try
             {
@@ -101,7 +101,7 @@ namespace LightInDark.Game
                 if (ev.IsCanceled) return;
 
                 Role?.Inactivate();
-                Role = newRole.CreateInstance(this, arguments);
+                Role = newRole.CreateRuntimeInternal(this);
                 EventTriggers.OnRoleAssigned(Control, newRole, arguments);
                 RpcDefinitions.SetRole(Control.PlayerId, newRole.Id, arguments);
 
@@ -116,15 +116,14 @@ namespace LightInDark.Game
         /// <summary>
         /// 仅本地设置角色（用于RPC接收）
         /// </summary>
-        internal void SetRoleLocal(Role newRole, int[] arguments = null)
+        internal void SetRoleLocal(RoleTemplate newRole, int[] arguments = null)
         {
             try
             {
                 if (newRole == null) return;
-                arguments ??= newRole.DefaultArguments;
 
                 Role?.Inactivate();
-                Role = newRole.CreateInstance(this, arguments);
+                Role = newRole.CreateRuntimeInternal(this);
 
                 Core.LightLogger.Log($"[Player] {Name} (本地) → {newRole.Name}");
             }
@@ -173,11 +172,11 @@ namespace LightInDark.Game
             }
         }
 
-        public bool Is<T>() where T : Role
+        public bool Is<T>() where T : RoleTemplate
         {
             try
             {
-                return Role is T;
+                return Role?.Role is T;
             }
             catch (Exception ex)
             {

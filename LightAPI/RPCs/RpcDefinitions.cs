@@ -288,6 +288,58 @@ namespace LightInDark.RPCs
             }
         }
 
+        // ============ 职业预定（/up） ============
+
+        /// <summary>玩家预定下一局强制分配的职业（发送者 → 房主处理）</summary>
+        [LidRPC]
+        public static void RequestPinnedRole(byte senderPlayerId, string roleName)
+        {
+            try
+            {
+                if (!AmongUsClient.Instance.AmHost) return;
+                Roles.Assignment.RolePinManager.HandleRequest(senderPlayerId, roleName);
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("RpcDefinitions.RequestPinnedRole", ex);
+            }
+        }
+
+        /// <summary>取消职业预定（发送者 → 房主处理）</summary>
+        [LidRPC]
+        public static void CancelPinnedRole(byte senderPlayerId)
+        {
+            try
+            {
+                if (!AmongUsClient.Instance.AmHost) return;
+                Roles.Assignment.RolePinManager.HandleCancel(senderPlayerId);
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("RpcDefinitions.CancelPinnedRole", ex);
+            }
+        }
+
+        /// <summary>向指定玩家聊天框显示一条系统消息（仅目标玩家本地显示）</summary>
+        [LidRPC]
+        public static void ShowSystemMessage(byte targetPlayerId, string message)
+        {
+            try
+            {
+                var pc = PlayerControl.LocalPlayer;
+                if (pc == null || pc.PlayerId != targetPlayerId) return;
+                if (HudManager.Instance?.Chat == null) return;
+                string orig = pc.name;
+                pc.SetName("System");
+                HudManager.Instance.Chat.AddChat(pc, message, false);
+                pc.SetName(orig);
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("RpcDefinitions.ShowSystemMessage", ex);
+            }
+        }
+
         [LidRPC(OnlyHost = true)]
         public static void KickPlayerWithReason(byte playerId, string reason)
         {
@@ -323,7 +375,7 @@ namespace LightInDark.RPCs
     public static class GameActions
     {
         /// <summary>分配角色给玩家（同步）</summary>
-        public static void AssignRole(Game.Player player, Role role)
+        public static void AssignRole(Game.Player player, RoleTemplate role)
         {
             try
             {

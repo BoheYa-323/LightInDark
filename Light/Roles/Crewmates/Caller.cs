@@ -8,55 +8,61 @@ using UnityEngine;
 
 namespace Light.Roles.Crewmates;
 
-/// <summary>
-/// Caller（单类声明：一个职业一个类）。
-/// 定义侧用虚属性（CodeName/Color/Category/IntroBlurbKey/SkillDescriptionKey/Allocation/IntroSFX），
-/// 静态配置用 [RoleOption]（注册时自动绑定 cfg），技能按钮在 OnActivated 中直接声明。
-/// </summary>
-public class Caller : Role
+/// <summary>召集者：可随时强制召开紧急会议的船员职业。</summary>
+public class Caller : RoleTemplate
 {
     public const string Code = "Caller";
 
+    public static readonly Caller MyRole = new();
+
     public override string CodeName => Code;
     public override LightInDark.Color Color => LightInDark.Color.Yellow;
-    public override RoleCategory Category => RoleCategory.Crewmate;
-    public override string IntroBlurbKey => "Caller.intro";
-    public override string SkillDescriptionKey => "Caller.skill";
+    public override RoleCategory RoleCategory => RoleCategory.Crewmate;
 
-    /// <summary>开场音效（相对路径 mp3，YouAreText 出现时播放）。TODO: 下一轮实现 mp3 解析。</summary>
+    /// <summary>开场音效（相对路径 mp3，YouAreText 出现时播放）。</summary>
     public override string IntroSFX => "./Resources/SFX/CallerIntro.mp3";
 
-    /// <summary>分配参数：每局必出 1 名 Caller（MaxCount/Chance 可由 .cfg 覆盖）。</summary>
+    /// <summary>分配参数：每局必出 1 名（MaxCount/Chance 可由配置覆盖）。</summary>
     public override AllocationParameters Allocation => new() { MaxCount = 1, GuaranteedCount = 1, Chance = 100 };
 
-    /// <summary>技能冷却（秒）。配置系统已删，直接使用代码默认值。</summary>
+    /// <summary>技能冷却（秒）。</summary>
     public static float Cooldown { get; set; } = 20f;
 
-    protected override void OnActivated()
+    public override RuntimeRoleTemplate CreateRuntime(PlayerControl owner)
+        => new RuntimeInstance(owner, this);
+
+    public class RuntimeInstance : RuntimeRoleTemplate
     {
-        try
-        {
-            if (!AmOwner) return;
+        public override RoleTemplate Role => MyRole;
 
-            // 普通按钮：主持人技能（秒会议）示例
-            CreateAbilityButton(new RoleButtonConfig()
-                .SetLabelKey("Button.Caller.label")
-                .SetHotkey(KeyCode.E)
-                .SetCooldown(Cooldown)
-                .SetOnClickSFX("./Resources/SFX/CallerUse.mp3")
-                .SetCooldownReadySFX("./Resources/SFX/CooldownReady.mp3"),
-                () => RpcDefinitions.RpcStartMeeting());
+        public RuntimeInstance(PlayerControl owner, RoleTemplate template) : base(owner, template) { }
 
-            // 持续按钮（效果按钮）示例：点一下开启效果，再点一下取消（AllowCancelByReclick 默认 true）
-            CreateEffectButton(new RoleButtonConfig()
-                .SetLabel("驱散")
-                .SetCooldown(5f)
-                .SetOnClickSFX("./Resources/SFX/CallerUse.mp3"),
-                () => LightLogger.Log("[Caller] 效果触发(示例)"));
-        }
-        catch (Exception ex)
+        protected override void OnActivated()
         {
-            LightLogger.LogError("[Caller.OnActivated]", ex);
+            try
+            {
+                if (!AmOwner) return;
+
+                // 普通按钮：主持人技能（秒会议）
+                AbilityButtonFactory.Create(this, new RoleButtonConfig()
+                    .SetLabelKey("Button.Caller.label")
+                    .SetHotkey(KeyCode.E)
+                    .SetCooldown(Cooldown)
+                    .SetOnClickSFX("./Resources/SFX/CallerUse.mp3")
+                    .SetCooldownReadySFX("./Resources/SFX/CooldownReady.mp3"),
+                    () => RpcDefinitions.RpcStartMeeting());
+
+                // 持续按钮：点一下开启效果，再点一下取消
+                AbilityButtonFactory.CreateEffect(this, new RoleButtonConfig()
+                    .SetLabel("驱散")
+                    .SetCooldown(5f)
+                    .SetOnClickSFX("./Resources/SFX/CallerUse.mp3"),
+                    () => LightLogger.Log("[Caller] 效果触发(示例)"));
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[Caller.OnActivated]", ex);
+            }
         }
     }
 }

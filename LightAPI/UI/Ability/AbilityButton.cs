@@ -25,11 +25,11 @@ namespace LightInDark.UI.Ability
         protected ActionButton _actionButton;
         protected PassiveButton _passiveButton;
 
-        protected AbilityButton(Role role, Player player, RoleButtonConfig config, Action onClick)
+        protected AbilityButton(RuntimeRoleTemplate role, Player player, RoleButtonConfig config, Action onClick)
             : base(role, player, config, onClick) { }
 
         /// <summary>创建普通按钮并注册到管理器。</summary>
-        public static AbilityButton Create(Role role, RoleButtonConfig config, Action onClick)
+        public static AbilityButton Create(RuntimeRoleTemplate role, RoleButtonConfig config, Action onClick)
         {
             try
             {
@@ -86,9 +86,8 @@ namespace LightInDark.UI.Ability
             if (!string.IsNullOrEmpty(label)) _actionButton.OverrideText(label);
             if (_config.Cooldown > 0f)
             {
-                _actionButton.SetCoolDown(0f, _config.Cooldown);
-                if (_actionButton.cooldownTimerText != null)
-                    _actionButton.cooldownTimerText.gameObject.SetActive(false);
+                // 初始为满冷却遮罩（数字+进度由 UpdateCooldownDisplay 每帧驱动）
+                _actionButton.SetCoolDown(_config.Cooldown, _config.Cooldown);
             }
         }
 
