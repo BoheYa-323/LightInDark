@@ -16,6 +16,7 @@ internal class LightOptionsRegistry
     static LightOptionButton? _reloadConfig;
     static LightOptionButton? _showTaskPanelInMeeting;
     static LightOptionButton? _cursorIdx;
+    static LightOptionButton? _autoCheckUpdate;
     public static void Register()
     {
         if (_reg) return;
@@ -61,6 +62,15 @@ internal class LightOptionsRegistry
              SyncFromSettings();
          });
 
+        _autoCheckUpdate = SettingsTabPatch.AddToggleButton(
+            "自动检查更新", s.AutoCheckUpdate, on =>
+            {
+                var cur = LightPlugin.LightSettingsData ??= new LightSettings.LightSettingsData();
+                cur.AutoCheckUpdate = on;
+                LightSettings.Save(cur);
+                LightSettings.ReloadConfig();
+            }, "启动时自动比对云端版本；关掉后仍可在主界面手动「检查更新」");
+
         SettingsTabPatch.LightTabOpened += SyncFromSettings;
     }
 
@@ -76,6 +86,7 @@ internal class LightOptionsRegistry
         SyncToggle(_unlockAll, s.UnlockAllCosmic);
         SyncToggle(_dontShow, s.DontShowCosmic);
         SyncToggle(_showTaskPanelInMeeting, s.ShowTaskPanelInMeeting);
+        SyncToggle(_autoCheckUpdate, s.AutoCheckUpdate);
 
         SyncSelector(_cursorIdx, Cursor.Index);
 

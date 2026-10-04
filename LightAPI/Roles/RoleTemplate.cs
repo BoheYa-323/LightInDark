@@ -87,8 +87,19 @@ namespace LightInDark.Roles
         /// <summary>一句话简介（按语言键解析）。</summary>
         public string ShortDescribeText => LightInDark.Language.Language.GetStringOrKey(ResolveKey(ShortDescribe), "");
 
-        /// <summary>职业描述（按语言键解析）。</summary>
+        /// <summary>职业描述（按语言键解析，仅 Normal 格式使用）。</summary>
         public string DescribeText => LightInDark.Language.Language.GetStringOrKey(ResolveKey(Describe), "");
+
+        /// <summary>
+        /// 职业描述全文（按 DocumentType 分发）：Normal 走语言键；
+        /// Html/MarkDown 时 Describe 存嵌入资源路径（如 "./Resources/Docs/x.html"），经 RoleDocument 渲染。
+        /// </summary>
+        public string GetDocumentText() => DocumentType switch
+        {
+            RoleDocumentType.Html => Documents.RoleDocument.Load(ResolveKey(Describe), GetType().Assembly, Documents.RoleDocument.RenderHtml),
+            RoleDocumentType.MarkDown => Documents.RoleDocument.Load(ResolveKey(Describe), GetType().Assembly, Documents.RoleDocument.RenderMarkdown),
+            _ => DescribeText,
+        };
 
         /// <summary>开场白（按语言键解析）。</summary>
         public string IntroText => LightInDark.Language.Language.GetStringOrKey(ResolveKey(Intro), "");

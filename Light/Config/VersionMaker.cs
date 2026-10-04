@@ -1,5 +1,6 @@
 using BepInEx;
 using LightInDark;
+using Light.Tools;
 using LightInDark.Core;
 using LightInDark.Utilities;
 using System;
@@ -89,16 +90,30 @@ public class VersionMaker
     }
     #endregion
 
-    public static readonly string UpdaterExeName = "LightInDarkUpdater.exe";
+    // =====================================================================
+    //  更新器工具（已合并到 LightToolManager）
+    // =====================================================================
+    //
+    // ⚠️ 原来是两套：
+    //    旧：LightInDarkUpdater.exe，放在**游戏根目录**（MainMenuPatch 的"检查更新"按钮走这套）
+    //    新：LightUpdater.exe，放在 <游戏根目录>\Light_Data\Tools（加载页会检查/下载它）
+    //    现在**合并成一套**：位置和文件名都由 LightToolManager 说了算，
+    //    这样加载页下载下来的工具，主界面按钮能直接用，不会再出现"下到 Tools 了但按钮还在根目录找"。
+
+    /// <summary>更新器文件名（转发到 <see cref="LightToolManager.UpdaterExeName"/>，保留旧名兼容）。</summary>
+    public static string UpdaterExeName => LightToolManager.UpdaterExeName;
+
+    /// <summary>更新器的完整路径（转发到 <see cref="LightToolManager.UpdaterPath"/>）。</summary>
+    public static string UpdaterExePath => LightToolManager.UpdaterPath;
 
     public static string CheckForUpdate()
     {
         try
         {
-            string path = Path.Combine(Paths.GameRootPath, UpdaterExeName);
+            string path = UpdaterExePath;
             if (!File.Exists(path))
             {
-                LightLogger.LogError($"未找到 {UpdaterExeName}，请确保它位于游戏根目录。");
+                LightLogger.LogError($"未找到 {UpdaterExeName}，请确保它位于 {LightToolManager.ToolsDir}。");
                 return "path error";
             }
             ProcessStartInfo startInfo = new ProcessStartInfo
@@ -133,7 +148,7 @@ public class VersionMaker
     {
         try
         {
-            string exePath = Path.Combine(Paths.GameRootPath, UpdaterExeName);
+            string exePath = UpdaterExePath;
             if (!File.Exists(exePath)) return;
 
             ProcessStartInfo startInfo = new ProcessStartInfo

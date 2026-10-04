@@ -24,16 +24,23 @@ namespace Light;
 
 [BepInPlugin(Id, Name, Version)]
 [BepInProcess("Among Us.exe")]
-[BepInDependency("com.moonscar.lightapi",BepInDependency.DependencyFlags.HardDependency)]
+[BepInDependency("cn.moonscar.lightapi",BepInDependency.DependencyFlags.HardDependency)]
+[BepInIncompatibility("jp.dreamingpig.amongus.nebula.loader")]
+[BepInIncompatibility("com.qin-qwq.townofnextedited")]
+[BepInIncompatibility("jp.ykundesu.supernewroles")]
+[BepInIncompatibility("com.ten.betteramongus")]
+[BepInIncompatibility("com.gurge44.endlesshostroles")]
+[BepInIncompatibility("com.emptybottle.townofhost")]
+[BepInIncompatibility("cn.havenglow.finalsuspect")]
 public partial class LightPlugin : BasePlugin
 {
-    public const string Id = "com.moonscar.lightindark";
+    public const string Id = "cn.moonscar.lid";
     public const string Name = "LightInTheDark";
-    public const string Version = "1.0.0";
+    public const string Version = "0.0.1";
 
-    public const string VisualVersion = "v1.0.0";
+    public const string VisualVersion = "v0.0.1";
 
-    public const string RichVersion = "<color=#4FD1C5>ver</color> <color=#38B2AC>1.0.0</color>";
+    public const string RichVersion = "<color=#4FD1C5>ver</color> <color=#38B2AC>0.0.1</color>";
     public static string AUVersion;
     public static string CursurDataPath = Application.persistentDataPath;
     public static MainColor.ModColorData ColorData;
