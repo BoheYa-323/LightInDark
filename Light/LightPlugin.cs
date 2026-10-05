@@ -25,8 +25,6 @@ namespace Light;
 [BepInPlugin(Id, Name, Version)]
 [BepInProcess("Among Us.exe")]
 [BepInDependency("cn.moonscar.lightapi",BepInDependency.DependencyFlags.HardDependency)]
-<<<<<<< HEAD
-=======
 [BepInIncompatibility("jp.dreamingpig.amongus.nebula.loader")]
 [BepInIncompatibility("com.qin-qwq.townofnextedited")]
 [BepInIncompatibility("jp.ykundesu.supernewroles")]
@@ -34,7 +32,6 @@ namespace Light;
 [BepInIncompatibility("com.gurge44.endlesshostroles")]
 [BepInIncompatibility("com.emptybottle.townofhost")]
 [BepInIncompatibility("cn.havenglow.finalsuspect")]
->>>>>>> 7309398f48492623b28a5c03efeffda744d2f7dd
 public partial class LightPlugin : BasePlugin
 {
     public const string Id = "cn.moonscar.lid";
@@ -76,7 +73,6 @@ public partial class LightPlugin : BasePlugin
             LightSettingsData = LightSettings.LoadSettingData(); // 存设置（必须在 PatchAll 之前）
 
             Harmony.PatchAll(); // 鸿蒙
-<<<<<<< HEAD
             // ⚠️⚠️ **暂时停用，用于排查「创建游戏连线区失败」**（2026-10-04）
             //
             //   实测现象：
@@ -115,12 +111,8 @@ public partial class LightPlugin : BasePlugin
             //
             //   → 用户确认过：**不要设置项**，之后自研 MCI 时再按自己的方案实现。
             //     在那之前保持这里为"不注册"，否则整个游戏建不了房。
-            // CurrentModRegistration.ModRegistrationGuidString = ModGuid;            Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
-=======
-            //CurrentModRegistration.ModRegistrationGuidString = ModGuid; // [禁用-MCI] 帅哥树懒太帅了你们知道吗
+            // CurrentModRegistration.ModRegistrationGuidString = ModGuid;   // [禁用-MCI]
             Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
-            LightSettingsData = LightSettings.LoadSettingData(); // 存设置
->>>>>>> 7309398f48492623b28a5c03efeffda744d2f7dd
             if (!VersionMaker.MakeVersion())
                 Log.LogError($"VM json 加载失败。具体异常请查看Light.log。"); // 这将是重大问题。写版本号。
             LoadCommand(); // 加载指令。
@@ -141,12 +133,19 @@ public partial class LightPlugin : BasePlugin
             RpcDefinitions.OnFreeChatStateChanged += show => ShowChatPatch.NeedShowFreeChat = show; // 不知道喵呜写的。
             AddCursorComponent(); // 鼠标。
             RegisterShowModStampOnMainMenu(); // MOD STAMPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+
+            // 跨场景常驻的每帧驱动器。
+            // ⚠️ 必须挂：原来所有每帧逻辑都挂在 MainMenuManager.LateUpdate 上，
+            //    而 MainMenuManager 只在 MainMenu 场景存在 → MatchMaking / FindAGame 里从不运行
+            //    （背景图/音频在那两个场景"没有"就是因为这个）。见 LightTicker 的注释。
+            try { Light.Utilities.LightTicker.Ensure(); } catch { }
             ChatHistoryLogUtils.Init(); // 聊天历史记录。
 
             // 握手验证暂停 2026-09-26
             // Handshake.HandshakeManager.Initialize();
 
             NewsManager.LoadNews(); // 加载新闻。
+            InitializeMusicPlayer(); // 音乐播放器（F3 自绘窗口）；失败只记日志，绝不让 Load 抛
             Log.LogInfo($"模组 {Name} v{Version} 已加载！");
         }
         catch (Exception ex)
@@ -157,6 +156,39 @@ public partial class LightPlugin : BasePlugin
     private static void RegisterAllConfigHead()
     {
         DebugConfig.Register();
+    }
+
+    /// <summary>
+    /// 音乐播放器（F3 窗口）。
+    ///
+    /// ⚠️ 这里只做"**把常驻宿主建起来**"这一件事：
+    ///    · <c>MusicPlayer</c> 是一个 <c>DontDestroyOnLoad</c> 的 MonoBehaviour，
+    ///      它自己负责音频源、解码调度、防爆音淡入 —— 切场景不会断音；
+    ///    · <c>MusicPlayerWindow</c> 挂在同一个宿主下面，每帧自己轮询 F3，
+    ///      因此**不需要任何 Harmony 补丁**，也就不会影响别的系统。
+    ///
+    ///    关键顺序：两个类内部都是"先 <c>ClassInjector.RegisterTypeInIl2Cpp</c> 再 AddComponent"，
+    ///    这一步不能省（IL2CPP 下没注册的类型 AddComponent 会抛）。
+    ///
+    ///    整个函数包 try/catch —— 音乐播放器坏了不能让整个模组加载失败。
+    /// </summary>
+    private static void InitializeMusicPlayer()
+    {
+        try
+        {
+            UI.MusicPlayer.MusicPlayer.EnsureInitialized();
+
+            var host = UI.MusicPlayer.MusicPlayer.Instance;
+            UI.MusicPlayer.MusicPlayerWindow.TryCreate(host != null ? host.transform : null);
+
+            // ⚠️ 这个方法是 static —— BepInEx 的 Log 是实例属性，所以只能用 StaticLog
+            //    （Load() 一开始就把 Log 存进 StaticLog 了，见最上面）
+            StaticLog.LogInfo("[LightPlugin] 音乐播放器已就绪（按 F3 开关）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[LightPlugin.InitializeMusicPlayer]", ex);
+        }
     }
     private static void RegisterShowModStampOnMainMenu()
     {

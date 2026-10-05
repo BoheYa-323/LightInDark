@@ -1070,29 +1070,112 @@ public static class MainMenuPatch
         }
     }
 
+    /// <summary>
+    /// 每帧驱动入口 —— **由两个驱动源共同调用**：
+    ///   ① 本方法（挂在 <c>MainMenuManager.LateUpdate</c> 的 Postfix）—— **只在 MainMenu 场景有效**
+    ///   ② <see cref="Light.Utilities.LightTicker"/>（DontDestroyOnLoad 常驻）—— 任何场景都在
+    ///
+    /// ⚠️⚠️ **为什么必须加第二个驱动源**（2026-10-05 实机定位）：
+    ///   `MainMenuManager` **只存在于 MainMenu 场景** —— MatchMaking（"本地"）的主控是
+    ///   `MMOnlineManager`，FindAGame（"搜索游戏"）又是另一个。所以只靠这个补丁的话，
+    ///   下面 `TickAll` 里那些 `sceneName == "MatchMaking"` / `"FindAGame"` 判断
+    ///   **全是死代码**，在那两个场景里 `Tick()` 根本不会被调用 ——
+    ///   用户报的「打开本地/搜索游戏后没有背景图、也没有音频」就是这么来的：
+    ///   **不是被关掉了，是从没启动过。**
+    /// </summary>
     [HarmonyPatch(typeof(MainMenuManager), "LateUpdate")]
     [HarmonyPostfix]
-    public static void LateUpdate()
+    public static void LateUpdate() => TickAll("MainMenuManager.LateUpdate");
+
+    /// <summary>上一帧跑过的帧号（"同一帧只跑一次"的守卫）。</summary>
+    private static int _lastTickFrame = -1;
+
+    // =====================================================================
+    //  诊断（2026-10-05 用户报「本地 / 搜索游戏没有背景图」时加的）
+    //  ⚠️ 目的：让用户跑一次就能从 LightLog.log 看出
+    //    ① 这个每帧入口到底有没有被调用；② 是哪个驱动源调用的；③ 场景名对不对。
+    //  节流：每个场景最多 6 条、每条至少间隔 300 帧（≈5 秒）。
+    // =====================================================================
+    private const int TickDiagMaxPerScene = 6;
+    private const int TickDiagFrameGap = 300;
+    private static string _tickDiagScene = "";
+    private static int _tickDiagCount;
+    private static int _tickDiagLastFrame = -100000;
+
+    /// <summary>节流地打一行「TickAll 被调用了」。绝不能抛异常（它自己在每帧路径上）。</summary>
+    private static void DiagTickAll(string driver, bool skippedByFrameGuard)
     {
         try
         {
+            string scene = SafeActiveSceneName();
+
+            // 换场景 → 计数归零并**立刻**打一条（保证"进这个场景了"一定能看到）
+            bool sceneChanged = scene != _tickDiagScene;
+            if (sceneChanged)
+            {
+                _tickDiagScene = scene;
+                _tickDiagCount = 0;
+                _tickDiagLastFrame = -100000;
+            }
+
+            if (!sceneChanged)
+            {
+                if (_tickDiagCount >= TickDiagMaxPerScene) return;
+                if (UnityEngine.Time.frameCount - _tickDiagLastFrame < TickDiagFrameGap) return;
+            }
+
+            _tickDiagLastFrame = UnityEngine.Time.frameCount;
+            _tickDiagCount++;
+
+            var sceneName = scene;
+            bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
+
+            LightLogger.Log($"[TickAll#{_tickDiagCount}/{TickDiagMaxPerScene}] driver={driver} " +
+                            $"scene='{sceneName}' isMainOrMatch={isMainOrMatch} " +
+                            $"frame={UnityEngine.Time.frameCount} skippedByFrameGuard={skippedByFrameGuard} " +
+                            $"tickerAlive={Light.Utilities.LightTicker.IsRunning} " +
+                            $"bgSelected='{BackgroundStore.Selected}' bgFail='{BackgroundRenderer.LastFailReason}'");
+        }
+        catch { }
+    }
+
+    /// <summary>当前场景名（读不到就返回 "?"，绝不抛）。</summary>
+    private static string SafeActiveSceneName()
+    {
+        try { return UnityEngine.SceneManagement.SceneManager.GetActiveScene().name; }
+        catch { return "?"; }
+    }
+
+    /// <summary>真正干活的每帧入口（两个驱动源共用）。</summary>
+    /// <param name="driver">谁调进来的（只用于诊断日志）。</param>
+    public static void TickAll(string driver = "unknown")
+    {
+        // ⚠️ 同一帧只跑一次：MainMenu 场景里补丁和 LightTicker 都会调进来，
+        //    不去重的话 TickInput() 那种鼠标轮询会被处理两次 → 一次点击算两下。
+        if (UnityEngine.Time.frameCount == _lastTickFrame)
+        {
+            DiagTickAll(driver, skippedByFrameGuard: true);
+            return;
+        }
+        _lastTickFrame = UnityEngine.Time.frameCount;
+        DiagTickAll(driver, skippedByFrameGuard: false);
+
+        try
+        {
             var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
-            // ⚠️⚠️ **不再包含 MatchMaking**（2026-10-04，用户实测「创建游戏连线区失败」）。
-                //   实测：同一 MOD、同一段代码，换服务器就能建房成功（NikoCN1 成功、其余全失败）。
-                //   说明 MOD 没有破坏建房协议，而是**在 MatchMaking 场景里每帧抢主线程**：
-                //   BackgroundRenderer.Tick / MainMenuButtonStyler.Apply / UiModalGuard.Sweep
-                //   都会在这里跑，而原版建房流程是「发 HostGame → 等服务器回 GameId，15 秒超时」
-                //   （见 InnerNetClient.WaitWithTimeout），主线程被拖住就可能等不到回包
-                //   → GameId 恒为 0 → LastCustomDisconnect = "创建游戏连线区失败…"。
-                //   区域选择/建房界面本来就不需要主界面改造，限制回 MainMenu。
-                bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
+            // ⚠️ 这三个场景是"主界面家族"：MainMenu（主菜单）、MatchMaking（本地/连线区选择）、
+            //    FindAGame（搜索游戏）。**背景图在这三个里都要显示**（用户要求），
+            //    而且音频要连续 —— 见 BackgroundRenderer.IsInMenuScene() 的注释。
+            //    注意这条判断在 TickAll 里是**死代码**的历史已经结束：现在由
+            //    LightTicker（DontDestroyOnLoad 常驻）驱动，任何场景都会调进来。
+            bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
 
             // 自定义背景（新实现）。
             // 旧实现靠"DontDestroyOnLoad + 世界坐标写死 z=520"，
             // 于是必须在这里补一堆"进别的场景就 SetActive(false) + 缩到 0.0001"的补丁去藏，
             // 而且相机一挪动它就跑出视锥 → "莫名其妙消失"。
             // 现在 BackgroundRenderer 不用 DontDestroyOnLoad（场景卸载自动销毁，不可能外泄），
-            // 并且每帧跟随相机（永远在视野里、永远在 UI 后面）。见该类注释。
+            // 并且每帧跟随相机（永远在视野里、永远在所有 UI 后面）。见该类注释。
             if (!isMainOrMatch)
             {
                 BackgroundRenderer.Shutdown();
@@ -1102,7 +1185,21 @@ public static class MainMenuPatch
                 return;
             }
 
+            // ① 背景：三个场景都要（这是用户要的那一件事）
             BackgroundRenderer.Tick();
+
+            // ② 下面这些是**主界面专有**的改造 —— 右侧面板滑入 / Light 屏 / 按钮贴图 /
+            //    呼吸效果 /「更换背景图」面板 / 把原版 BackgroundTexture 推走。
+            //
+            //    ⚠️⚠️ 为什么在这里**刻意收窄**（2026-10-04 的实测教训，别删这段注释）：
+            //    在 MatchMaking 里每帧跑这些曾导致「创建游戏连线区失败」——
+            //    原版建房流程是「发 HostGame → 等服务器回 GameId，15 秒超时」
+            //    （InnerNetClient.WaitWithTimeout），主线程被拖住就可能等不到回包
+            //    → GameId 恒为 0 → LastCustomDisconnect = "创建游戏连线区失败…"。
+            //    在那两个场景里这些调用本来也全是空转（面板不存在、按钮集合为空、
+            //    呼吸效果没注册过任何按钮），所以收窄既不影响功能、又不会重蹈覆辙。
+            if (sceneName != "MainMenu") return;
+
             BackgroundPanel.Active?.TickInput();
 
             // 按钮样式：设置变了才真的重刷（Apply 内部有变化检测，每帧调代价极小）
@@ -1333,8 +1430,9 @@ public static class MainMenuPatch
         try
         {
             if (ev == null) return;
-            // ⚠️ 同上：不再包含 MatchMaking，理由见上面那一处。
-                bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
+            // 和 TickAll 保持同一套"主界面家族"判断（MainMenu / MatchMaking / FindAGame），
+            // 否则切到 FindAGame 时会把刚建好的背景 Shutdown 掉。
+            bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
 
             if (!isMainOrMatch)
             {

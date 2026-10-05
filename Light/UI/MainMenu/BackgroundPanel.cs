@@ -220,6 +220,9 @@ public class BackgroundPanel
         if (!_showing) return;
         if (!IsAlive) { Hide(); return; }
 
+        // 通用滑条：每帧驱动拖动（鼠标左键按下 → 拖动 → 松开）。
+        try { _volumeSlider?.Tick(); } catch { }
+
         // 视频预览抽帧（每帧推一下，抽到就转成 Sprite）
         try
         {
@@ -607,10 +610,18 @@ public class BackgroundPanel
         _crewButton = MakeButton(root, "Crew", CrewLabel(), new Vector2(1.6f, 0.42f),
             new Vector3(0.0f, -1.44f, -0.1f), ToggleCrew, false);
 
-        // 视频音量：单独占一整行（标签长，给足宽度）
-        _volumeButton = MakeButton(root, "VideoVolume", VolLabel(), new Vector2(4.3f, 0.4f),
-            new Vector3(cx, -1.88f, -0.1f), CycleVolume, false, fontSize: 1.35f);
+        // 视频音量行：**左标签 + 右滑条共享一行**。
+        //   原来是"一整条 4.3 宽按钮、点一下 +10"，粒度太粗（用户早期就吐槽过）。
+        //   ⚠️ 面板纵向很挤（音量行 -1.88、下面按钮行 -2.34，中间只有 0.46），
+        //      塞不下一整行滑条 → 拆成左右两半共享这一行，**不动任何其它行的坐标**。
+        _volumeButton = MakeButton(root, "VideoVolume", VolLabel(), new Vector2(1.95f, 0.4f),
+            new Vector3(cx - 1.175f, -1.88f, -0.1f), CycleVolume, false, fontSize: 1.25f);
         if (_volumeButton != null) _volumeButton.OnRightClick = PromptVolumeExact;
+
+        // 右半：连续滑条（0~100）。左标签保留点击 +10 / 右键填值的老习惯。
+        _volumeSlider = Light.UI.Window.LightSlider.Create(root, "VideoVolumeSlider",
+            new Vector3(cx + 1.00f, -1.88f, -0.1f), 2.30f,
+            Mathf.Clamp01(_draftVideoVolume / 100f), OnVolumeSliderChanged);
 
         // ---- 按钮样式 / 按钮颜色 ----
         // 点「按钮样式」循环切换 MOD → 原版 → 亚克力。
@@ -656,9 +667,33 @@ public class BackgroundPanel
     private string VolLabel() => $"视频音量 {Mathf.Clamp(_draftVideoVolume, 0, 100)}%   （右键输入具体值）";
 
     /// <summary>左键：音量 +10（100 → 0 循环）。</summary>
+    /// <summary>滑条拖动回调：0~1 落成 0~100，并同步左标签文字。</summary>
+    private void OnVolumeSliderChanged(float v)
+    {
+        try
+        {
+            _draftVideoVolume = Mathf.Clamp(Mathf.RoundToInt(v * 100f), 0, 100);
+            RefreshControls();      // 里面会重写 _volumeButton 的文字
+            RefreshPreview();
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[BackgroundPanel.OnVolumeSliderChanged] {ex.Message}");
+        }
+    }
+
+    /// <summary>把草稿音量同步到滑条（点标签 +10 / 右键填值 / 载入草稿后调用）。
+    /// SetValue(notify:false) 避免回调里再写一次草稿值造成回环。</summary>
+    private void SyncVolumeSlider()
+    {
+        try { _volumeSlider?.SetValue(Mathf.Clamp01(_draftVideoVolume / 100f), notify: false); }
+        catch (Exception ex) { LightLogger.LogWarning($"[BackgroundPanel.SyncVolumeSlider] {ex.Message}"); }
+    }
+
     private void CycleVolume()
     {
         _draftVideoVolume = _draftVideoVolume >= 100 ? 0 : _draftVideoVolume + 10;
+        SyncVolumeSlider();
         RefreshControls();
         RefreshPreview();
     }
@@ -1250,6 +1285,7 @@ public class BackgroundPanel
         if (_dimButton != null) _dimButton.Text.text = DimLabel();
         if (_crewButton != null) _crewButton.Text.text = CrewLabel();
         if (_volumeButton != null) _volumeButton.Text.text = VolLabel();
+        SyncVolumeSlider();   // ⚠️ 任何改了 _draftVideoVolume 的路径（载入草稿/点标签+10/右键填值）都要让滑条跟上；SetValue(notify:false) 不会回环
         if (_styleButton != null) _styleButton.Text.text = BtnStyleLabel();
 
         // 「按钮颜色」只在（草稿的）亚克力样式下出现
@@ -1340,6 +1376,9 @@ public class BackgroundPanel
     private int _draftDim;
     private bool _draftHideCrew;
     private int _draftVideoVolume;
+
+    /// <summary>视频音量滑条（0~100 连续）。由 TickInput 每帧驱动拖动。</summary>
+    private Light.UI.Window.LightSlider? _volumeSlider;
     private MainButtonStyle _draftStyle = MainButtonStyle.Mod;
 
     /// <summary>

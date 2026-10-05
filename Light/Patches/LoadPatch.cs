@@ -1234,13 +1234,20 @@ public static class LoadPatch
         ambientRunning = false;
         yield return null; // 等环境协程退出
 
-        // 淡出顺序：光斑 → 提示 → 版本 → 点击提示 → **红字堆（倒数第二）** → LOGO（最后）
+        // 淡出顺序：光斑 → 提示 → 版本 → 点击提示 → **新版本金字（倒数第三）**
+        //           → **红字堆（倒数第二）** → LOGO（最后）
         //   红字堆一条一条消失（从最下面那条开始），用户要求它是倒数第二个。
+        //   新版本金字是后加的：它原本**不在这个序列里**，所以进游戏前一直挂在屏幕上不消失，
+        //   用户报「那个文字不会淡出」。现在插在 clickText 之后 → 倒数第三个。
         for (int i = 0; i < blobs.Count; i++)
             yield return FadeAlpha(blobs[i], blobs[i].color.a, 0f, 0.4f);
         yield return FadeAlpha(tipText, tipText.alpha, 0f, 0.4f);
         yield return FadeAlpha(versionText, versionText.alpha, 0f, 0.4f);
         yield return FadeAlpha(clickText, clickText.alpha, 0f, 0.4f);
+
+        // ⚠️ 只有检测到新版本时 newVerText 才非 null（见上面 8.5 段），所以必须判空
+        if (newVerText != null)
+            yield return FadeAlpha(newVerText, newVerText.alpha, 0f, 0.4f);
 
         foreach (var err in errorTexts)
             if (err != null)
@@ -1255,6 +1262,7 @@ public static class LoadPatch
         if (tipText != null) UnityEngine.Object.Destroy(tipText.gameObject);
         if (versionText != null) UnityEngine.Object.Destroy(versionText.gameObject);
         if (clickText != null) UnityEngine.Object.Destroy(clickText.gameObject);
+        if (newVerText != null) UnityEngine.Object.Destroy(newVerText.gameObject);
         foreach (var t in completedSteps) if (t != null) UnityEngine.Object.Destroy(t.gameObject);
         completedSteps.Clear();
         foreach (var e in errorTexts) if (e != null) UnityEngine.Object.Destroy(e.gameObject);

@@ -208,6 +208,23 @@ public static class UiModalGuard
 
     private static bool _loggedFirstSweep;
 
+    /// <summary>
+    /// <b>强制</b>做一次完整扫描（把 <see cref="Sweep"/> 里"按钮数量没变就短路"的优化跳过）。
+    ///
+    /// 为什么需要它：<see cref="Sweep"/> 只在 <c>Buttons.Count</c> 变化时才真正遍历一遍；
+    /// 而原版会在很多地方自己把按钮 <c>enabled</c> 回来（大厅 HUD 的按钮随状态开关尤其常见）。
+    /// 一旦数量没变，短路会让遮罩漏掉那些刚被重新启用的按钮 → 又变成"点击穿透"。
+    ///
+    /// 调用者：音乐播放器窗口（F3，任何场景都能开）。它没有别的每帧驱动者
+    /// —— 主菜单里 <c>MainMenuPatch</c> 会调 <see cref="Sweep"/>，但大厅/游戏内没有。
+    /// 为了不每帧都全扫，那边是低频调用的。
+    /// </summary>
+    public static void ForceSweep()
+    {
+        _lastListCount = -1;   // 让下一次 Sweep 认为"数量变了"，从而完整遍历
+        Sweep();
+    }
+
     /// <summary>在**任意一个**我们的模态窗口底下就算"我们的"。</summary>
     private static bool IsUnderAnyRoot(Transform? t)
     {

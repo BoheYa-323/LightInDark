@@ -71,14 +71,6 @@ internal class LightOptionsRegistry
                 LightSettings.ReloadConfig();
             }, "启动时自动比对云端版本；关掉后仍可在主界面手动「检查更新」");
 
-<<<<<<< HEAD
-        // ⚠️ MCI 注册**不做成设置项**（用户决定：之后自研 MCI 时另行实现）。
-        //    在自研方案落地前，LightPlugin.Load 里那一行保持注释状态 ——
-        //    一旦注册 GUID，开房会切到 Tags.HostModdedGame(25)，而只有官方服务器
-        //    和匹配器实现了它，私服和本地游戏会直接「创建游戏连线区失败」。
-
-=======
->>>>>>> 7309398f48492623b28a5c03efeffda744d2f7dd
         SettingsTabPatch.LightTabOpened += SyncFromSettings;
     }
 
