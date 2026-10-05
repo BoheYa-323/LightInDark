@@ -57,7 +57,7 @@ public partial class LightPlugin : BasePlugin
             //FirstChanceExceptionLogger.Initialize();
             StaticLog = Log; // BepInEx日志
             Harmony.PatchAll(); // 鸿蒙
-            CurrentModRegistration.ModRegistrationGuidString = ModGuid; // 感谢树懒18.0+提供的牛逼Modded方法。 MCI
+            //CurrentModRegistration.ModRegistrationGuidString = ModGuid; // [禁用-MCI] 帅哥树懒太帅了你们知道吗
             Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
             LightSettingsData = LightSettings.LoadSettingData(); // 存设置
             if (!VersionMaker.MakeVersion())
