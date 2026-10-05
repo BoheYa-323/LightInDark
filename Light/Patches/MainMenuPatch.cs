@@ -1077,7 +1077,15 @@ public static class MainMenuPatch
         try
         {
             var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
-            bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
+            // ⚠️⚠️ **不再包含 MatchMaking**（2026-10-04，用户实测「创建游戏连线区失败」）。
+                //   实测：同一 MOD、同一段代码，换服务器就能建房成功（NikoCN1 成功、其余全失败）。
+                //   说明 MOD 没有破坏建房协议，而是**在 MatchMaking 场景里每帧抢主线程**：
+                //   BackgroundRenderer.Tick / MainMenuButtonStyler.Apply / UiModalGuard.Sweep
+                //   都会在这里跑，而原版建房流程是「发 HostGame → 等服务器回 GameId，15 秒超时」
+                //   （见 InnerNetClient.WaitWithTimeout），主线程被拖住就可能等不到回包
+                //   → GameId 恒为 0 → LastCustomDisconnect = "创建游戏连线区失败…"。
+                //   区域选择/建房界面本来就不需要主界面改造，限制回 MainMenu。
+                bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
 
             // 自定义背景（新实现）。
             // 旧实现靠"DontDestroyOnLoad + 世界坐标写死 z=520"，
@@ -1325,7 +1333,8 @@ public static class MainMenuPatch
         try
         {
             if (ev == null) return;
-            bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
+            // ⚠️ 同上：不再包含 MatchMaking，理由见上面那一处。
+                bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
 
             if (!isMainOrMatch)
             {
