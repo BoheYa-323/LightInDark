@@ -736,7 +736,18 @@ public static class LoadPatch
 
     public static bool Prefix(SplashManager __instance)
     {
-        if (LightPlugin.LightSettingsData.SkipLoadAnimation) return true;
+        // ⚠️⚠️ 原来这一行**在 try 外面**，而且直接解引用 LightPlugin.LightSettingsData。
+        //    那个字段是在 LightPlugin.Load() 里、**Harmony.PatchAll() 之后**才赋值的，
+        //    所以只要 Load() 在那之前抛了异常（实测就是我上一轮加的日志过滤补丁干的），
+        //    这里就 NRE —— 异常**逃出 prefix**、打断 SplashManager.Update，
+        //    表现为「卡在启动页进不去 + 每帧刷一条 NRE」。
+        //    现在：null 安全（读不到就按"不跳过"处理），并且整段包进 try。
+        try
+        {
+            if (LightPlugin.LightSettingsData?.SkipLoadAnimation == true) return true;
+        }
+        catch { }
+
         try
         {
             cachedDoneLoadingRefData |= __instance.doneLoadingRefdata;

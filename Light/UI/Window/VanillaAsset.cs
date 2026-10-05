@@ -150,7 +150,12 @@ public static class VanillaAsset
                 if (_whiteSprite != null) return _whiteSprite;
 
                 var tex = Texture2D.whiteTexture;
-                _whiteSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                // ⚠️ 必须用 FullRect：这个 sprite 到处被 drawMode = Sliced/Tiled 平铺用，
+                //    默认的 Tight 网格会触发 Unity 警告
+                //    "Sprite Tiling might not appear correctly because the Sprite used
+                //     is not generated with Full Rect"（实测刷了 7 次）。
+                _whiteSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height),
+                    new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect);
                 // 兜底图必须活到最后，否则连它都没了 UI 就彻底空白
                 try { _whiteSprite.hideFlags |= HideFlags.DontUnloadUnusedAsset; } catch { }
                 return _whiteSprite;

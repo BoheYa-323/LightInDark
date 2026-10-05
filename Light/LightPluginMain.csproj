@@ -48,15 +48,40 @@
 			<CustomOutDir>$(ProjectDir)..\Output\</CustomOutDir>
 		</PropertyGroup>
 		<MakeDir Directories="$(CustomOutDir)" Condition="!Exists('$(CustomOutDir)')" />
-		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(CustomOutDir)" />
-		<Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(CustomOutDir)" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
 
-		<!-- 单独构建本插件时，也把 API 产物复制到 Output -->
-		<Copy SourceFiles="$(ProjectDir)..\Libs\LightInDark.dll" DestinationFolder="$(CustomOutDir)" Condition="Exists('$(ProjectDir)..\Libs\LightInDark.dll')" />
+		<!-- ==================================================================
+		     生成主插件时，往 Output\ 放**两个要部署的文件**：
+
+		       Light.dll         主插件（本项目产物）
+		       LightInDark.dll   API  —— ⚠️ 程序集名是 **LightInDark**，
+		                               "LightAPI" 只是它的项目/文件夹名
+		                               （..\LightAPI\LightInDark.csproj）
+
+		     LightInDark.dll 取两条路，先真产物再兜底：
+		       ① @(ReferencePath) 里程序集名为 LightInDark 的那条 —— ProjectReference
+		          解析出来的真实产物路径（通常是 LightAPI\bin\...\LightInDark.dll）
+		       ② ..\Libs\LightInDark.dll —— LightInDark.csproj 的 CopyToLibs 目标
+		          每次构建都会把产物同步到那儿，所以那份总是最新的
+
+		     不用 @(ReferenceCopyLocalPaths) 过滤：..\Libs\*.dll 那个通配会把
+		     Libs\LightInDark.dll 以 <Private>false</Private> 引进来，
+		     和 ProjectReference 打架，导致它不一定出现在那个集合里。
+		     ================================================================== -->
+		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(CustomOutDir)" />
 
 		<ItemGroup>
-			<FilteredDependencies Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)' == 'Light' OR '%(Filename)' == 'LightInDark'" />
+			<_ApiDllFromRef Include="@(ReferencePath)" Condition="'%(Filename)' == 'LightInDark'" />
 		</ItemGroup>
-		<Copy SourceFiles="@(FilteredDependencies)" DestinationFolder="$(CustomOutDir)" />
+		<Copy SourceFiles="@(_ApiDllFromRef)" DestinationFolder="$(CustomOutDir)"
+		      Condition="'@(_ApiDllFromRef)' != ''"
+		      SkipUnchangedFiles="true" />
+
+		<Copy SourceFiles="$(ProjectDir)..\Libs\LightInDark.dll" DestinationFolder="$(CustomOutDir)"
+		      Condition="Exists('$(ProjectDir)..\Libs\LightInDark.dll')"
+		      SkipUnchangedFiles="true" />
+
+		<Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(CustomOutDir)" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+
+		<Message Importance="high" Text="[Output] Light.dll + LightInDark.dll → $(CustomOutDir)" />
 	</Target>
 </Project>

@@ -39,6 +39,28 @@ public class ServerSelectPatch
 // 
 // Path：Patches/Game_Vanilla/ServerDropDownPatch.cs
 
+// ⚠️⚠️ **暂时停用**（类级 [HarmonyPatch] 注释掉 → PatchAll 跳过整个类）。
+//
+// 这是从参考模组抄来的老代码（见上面 "From: Final Suspect"），
+// 它用 `FillServerOptions_Prefix` 返回 false **整个替换**了原版的
+// `ServerDropdown.FillServerOptions`。
+//
+// 后果（实测堆栈，LightLog.log 的 [异常堆栈]）：
+//     SlicedAspectScaler.Update ()                     ← 原版每帧跑
+//       → AspectScaledAsset.ScaleObject ()
+//         → <ScaleObject>b__0 (AspectScaledSprite s)
+//           → UnityEngine.SpriteRenderer.get_size ()   ← NullReferenceException
+//
+// 原版那份实现里包含"把按钮的 SpriteRenderer 登记进 AspectScaledAsset"的步骤，
+// 我们的重写版跳过了其中一部分 → 那个 aspect scaler 的列表不完整，
+// 每帧遍历都会踩到空引用 → **进区域选择 / 点「本地」就无限刷 NRE**。
+// 用户反馈这正是"很久以前就有"的问题。
+//
+// 现在恢复原版行为。以后要再做服务器列表改造，必须**照着原版把
+// AspectScaledAsset 的登记一起做完**，而不是只摆位置和缩放。
+//
+// 注意：停用会连 `FillServerOptions_Postfix`（FindAGame 场景的重排）一起停掉，
+// 也就是两个场景都回到原版布局 —— 这是当前最安全的选择。
 [HarmonyPatch]
 public static class ServerDropDownPatch
 {
@@ -51,7 +73,11 @@ public static class ServerDropDownPatch
         const int maxPerColumn = 6;
         const float columnWidth = 4.15f;
         const float buttonSpacing = 0.5f;
-        var regions = DestroyableSingleton<ServerManager>.Instance.AvailableRegions.OrderBy(ServerManager.DefaultRegions.Contains).ToList();
+        // ⚠️ 走 LightServerList：**屏蔽官方服务器**（只保留 TranslateName == NoTranslation 的）
+        //    + 注入自带服务器。这是 UI 层过滤，没动网络层（见 LightServerList 的注释）。
+        //    过滤后为空时会自动回退成原列表，不会让下拉框空掉。
+        var regions = Light.UI.MainMenu.LightServerList.AllowedRegions()
+            .OrderBy(ServerManager.DefaultRegions.Contains).ToList();
         var totalColumns = Mathf.Max(1, Mathf.CeilToInt(regions.Count / (float)maxPerColumn));
         int num = 0;
         int column = 0;
