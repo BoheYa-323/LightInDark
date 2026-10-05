@@ -25,15 +25,25 @@ namespace Light;
 [BepInPlugin(Id, Name, Version)]
 [BepInProcess("Among Us.exe")]
 [BepInDependency("cn.moonscar.lightapi",BepInDependency.DependencyFlags.HardDependency)]
+<<<<<<< HEAD
+=======
+[BepInIncompatibility("jp.dreamingpig.amongus.nebula.loader")]
+[BepInIncompatibility("com.qin-qwq.townofnextedited")]
+[BepInIncompatibility("jp.ykundesu.supernewroles")]
+[BepInIncompatibility("com.ten.betteramongus")]
+[BepInIncompatibility("com.gurge44.endlesshostroles")]
+[BepInIncompatibility("com.emptybottle.townofhost")]
+[BepInIncompatibility("cn.havenglow.finalsuspect")]
+>>>>>>> 7309398f48492623b28a5c03efeffda744d2f7dd
 public partial class LightPlugin : BasePlugin
 {
-    public const string Id = "com.moonscar.lightindark";
+    public const string Id = "cn.moonscar.lid";
     public const string Name = "LightInTheDark";
     public const string Version = "0.0.1";
 
-    public const string VisualVersion = "v1.0.0";
+    public const string VisualVersion = "v0.0.1";
 
-    public const string RichVersion = "<color=#4FD1C5>ver</color> <color=#38B2AC>1.0.0</color>";
+    public const string RichVersion = "<color=#4FD1C5>ver</color> <color=#38B2AC>0.0.1</color>";
     public static string AUVersion;
     public static string CursurDataPath = Application.persistentDataPath;
     public static MainColor.ModColorData ColorData;
@@ -66,6 +76,7 @@ public partial class LightPlugin : BasePlugin
             LightSettingsData = LightSettings.LoadSettingData(); // 存设置（必须在 PatchAll 之前）
 
             Harmony.PatchAll(); // 鸿蒙
+<<<<<<< HEAD
             // ⚠️⚠️ **暂时停用，用于排查「创建游戏连线区失败」**（2026-10-04）
             //
             //   实测现象：
@@ -105,6 +116,11 @@ public partial class LightPlugin : BasePlugin
             //   → 用户确认过：**不要设置项**，之后自研 MCI 时再按自己的方案实现。
             //     在那之前保持这里为"不注册"，否则整个游戏建不了房。
             // CurrentModRegistration.ModRegistrationGuidString = ModGuid;            Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
+=======
+            //CurrentModRegistration.ModRegistrationGuidString = ModGuid; // [禁用-MCI] 帅哥树懒太帅了你们知道吗
+            Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
+            LightSettingsData = LightSettings.LoadSettingData(); // 存设置
+>>>>>>> 7309398f48492623b28a5c03efeffda744d2f7dd
             if (!VersionMaker.MakeVersion())
                 Log.LogError($"VM json 加载失败。具体异常请查看Light.log。"); // 这将是重大问题。写版本号。
             LoadCommand(); // 加载指令。

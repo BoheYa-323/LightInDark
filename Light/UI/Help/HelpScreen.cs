@@ -645,8 +645,8 @@ public static class HelpScreen
             headerWidgets.Add(textColumn);
             var header = gui.HorizontalHolder(GUIAlignment.Left, headerWidgets.ToArray());
 
-            // 技能介绍
-            var skill = role.DescribeText;
+            // 技能介绍（按职业的 DocumentType 渲染：Normal 走语言键，Html/MarkDown 走嵌入文档）
+            var skill = role.GetDocumentText();
 
             return gui.VerticalHolder(GUIAlignment.Left,
                 header,

@@ -748,9 +748,9 @@ public static class MainMenuPatch
             SetUpBtn("成就", () => LightLogger.LogWarning("[Light] 成就 - 待实现"));
             SetUpBtn("Discord", () => Application.OpenURL("https://discord.gg/"));
 
-            // 【新增】背景图设置 —— 打开模态面板（用户要求：Light 主界面变成 6 个按钮）
+            // 【新增】更换背景图 —— 打开模态面板（用户要求：Light 主界面变成 6 个按钮）
             // 2 列布局下 index 4/5 正好是第三排的两个，不会多出一行。
-            SetUpBtn("背景图设置", () =>
+            SetUpBtn("更换背景图", () =>
             {
                 if (_lightScreen != null) _lightScreen.SetActive(false);
                 _bgPanel?.Show();

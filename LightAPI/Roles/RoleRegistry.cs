@@ -13,7 +13,7 @@ namespace LightInDark.Roles
     /// </summary>
     public static class RoleRegistry
     {
-        private static readonly Dictionary<string, RoleTemplate> _roles = new();
+        private static readonly Dictionary<string, RoleTemplate> _roles = new(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<Type, RoleTemplate> _rolesByType = new();
         private static readonly Dictionary<int, RoleTemplate> _rolesById = new();
         private static int _nextId;

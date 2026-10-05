@@ -41,9 +41,9 @@ public static class Language
                 try
                 {
                     string json = File.ReadAllText(file, Encoding.UTF8);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                    if (dict != null)
-                        _all[name] = dict;
+                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                if (dict != null)
+                    _all[name] = new Dictionary<string, string>(dict, StringComparer.OrdinalIgnoreCase);
                 }
                 catch { }
             }
@@ -70,7 +70,7 @@ public static class Language
 
             if (!_all.ContainsKey(_current))
             {
-                _all[_current] = new Dictionary<string, string>();
+                _all[_current] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 SaveLanguageFile(_current, _all[_current]);
             }
         }
