@@ -590,7 +590,16 @@ public static class GameSettingMenuPatch
     {
         LoadTabAndPresetAssets();
 
-        var page = NewUIObject("LightModSettingsPage", parent, new Vector3(0f, 1.2f, -2.5f));
+        // ⚠️ 不能挂在 RoleSettingsTab 下：切到 MOD 类页签时 ChangeTabPrefix 会把
+        //    RoleSettingsTab 整体 SetActive(false)（不像预设页会打开 PresetsTab），
+        //    挂在其下的占位文字/职业按钮列表会被连带隐藏 → 用户"看不到职业"。
+        //    改挂到其父级（与各克隆菜单同级，切页签不会被关），并换算世界变换，
+        //    保证页内元素视觉位置不变。
+        var root = parent.parent != null ? parent.parent : parent;
+        var page = NewUIObject("LightModSettingsPage", root, Vector3.zero);
+        page.transform.position = parent.TransformPoint(new Vector3(0f, 1.2f, -2.5f));
+        page.transform.rotation = parent.rotation;
+        page.transform.localScale = parent.localScale;
 
         // 占位提示（无内容分类显示「XX页签暂未实现。」）
         _modPlaceholderText = CloneText(page.transform, new Vector3(0f, -0.8f, -0.1f), "", 1.5f);
