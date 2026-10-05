@@ -683,7 +683,20 @@ public static class MainMenuButtonSpritePatch
                 if (container == null) continue;
                 HideChild(container, "Shine");
                 var icon = container.transform.FindChild("Icon");
-                if (icon != null) UnityEngine.Object.Destroy(icon.gameObject);
+                // ⚠️⚠️ **绝对不能 Destroy！**
+                //
+                //  实测堆栈（LightLog.log 的 [异常堆栈]）：
+                //    UnityEngine.SpriteRenderer.get_size ()
+                //    AspectScaledAsset.<ScaleObject>b__0 (AspectScaledAsset+ScaledSprite s)
+                //    AspectScaledAsset.ScaleObject (Single aspectDiff)
+                //    SlicedAspectScaler.Update ()        ← 原版每帧跑
+                //
+                //  原版 SlicedAspectScaler.Update() **每帧**遍历 AspectScaledAsset 的
+                //  ScaledSprite 列表并对每项取 .size。Destroy 掉 Icon 之后列表里那个
+                //  SpriteRenderer 就成了"已销毁"引用 → **每帧一条 NRE**（就是那个刷屏）。
+                //
+                //  正确做法：**不销毁，只让它看不见**（见 SuppressRenderer）。
+                if (icon != null) SuppressRenderer(icon.gameObject);
             }
         }
         catch (Exception ex)
@@ -737,6 +750,38 @@ public static class MainMenuButtonSpritePatch
         }
     }
 
+    /// <summary>
+    /// 让一个 GameObject 上**所有**渲染器"看不见"，但**不销毁它**。
+    ///
+    /// ⚠️⚠️ 这是为了绕开原版 <c>SlicedAspectScaler</c> 的坑：
+    ///    它每帧遍历 <c>AspectScaledAsset</c> 的 ScaledSprite 列表取 <c>.size</c>，
+    ///    Destroy 掉任何一个被登记的 SpriteRenderer 都会让那一帧抛 NRE（且每帧重复）。
+    ///     实测堆栈：SpriteRenderer.get_size ← AspectScaledAsset.ScaleObject ← SlicedAspectScaler.Update
+    ///
+    /// 所以这里三道保险，全都是"隐藏"而不是"删除"：
+    ///   ① <c>enabled = false</c> —— 最直接
+    ///   ② <c>color.a = 0</c>     —— 被重新 enable 也不显示
+    ///   ③ <c>localScale = 0</c>  —— 前两道都被覆盖也画不出来
+    /// </summary>
+    private static void SuppressRenderer(GameObject go)
+    {
+        try
+        {
+            if (go == null) return;
+
+            foreach (var sr in go.GetComponentsInChildren<SpriteRenderer>(true))
+            {
+                if (sr == null) continue;
+                sr.enabled = false;
+                var c = sr.color; c.a = 0f; sr.color = c;
+                sr.transform.localScale = Vector3.zero;
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[MainMenuButtonSprite.SuppressRenderer] {ex.Message}");
+        }
+    }
     private static void HideChild(GameObject parent, string childName)
     {
         if (parent == null) return;
