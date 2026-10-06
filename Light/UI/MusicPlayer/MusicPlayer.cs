@@ -62,6 +62,62 @@ public sealed class MusicPlayer : MonoBehaviour
     // ===== 运行时状态 =====
     private AudioSource? _source;
 
+    /// <summary>
+    /// BASS 后端（流式播放）。**非 null 时优先用它**,原来那套
+    /// <c>AudioSource</c> + 整段 <c>AudioClip</c> 解码作为回退。
+    ///
+    /// ⚠️ 为什么要有回退:BASS 依赖原生 <c>bass.dll</c>,而那条链路上任何一环
+    ///    （嵌入资源缺失 / 释放失败 / <c>Bass.Init</c> 失败 / 版本不匹配）出问题,
+    ///    整个播放器就哑了。wav 那条纯托管自解码路径**不依赖任何原生库**,
+    ///    是最后的保命线 —— 所以这里判活失败时静默退回原路径,不报错、不打扰用户。
+    ///
+    /// ⚠️ **每次读都判活**,不要在字段里缓存:`BassMusicPlayer` 的宿主是
+    ///    <c>DontDestroyOnLoad</c> 的,但初始化是异步完成的,启动早期它还没 ready。
+    /// </summary>
+    private static Light.Audio.BassMusicPlayer? Bass
+    {
+        get
+        {
+            try
+            {
+                var b = Light.Audio.BassMusicPlayer.Instance;
+                if (b == null)
+                {
+                    LogBassUnavailableOnce("BassMusicPlayer.Instance == null（宿主没建起来 —— 看有没有 'BASS 已就绪' 那行）");
+                    return null;
+                }
+                if (!b.IsReady)
+                {
+                    LogBassUnavailableOnce($"宿主在但 IsReady=false（LastError={b.LastError}）");
+                    return null;
+                }
+                return b;
+            }
+            catch (Exception ex)
+            {
+                LogBassUnavailableOnce($"读取 BassMusicPlayer 抛异常: {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+    }
+
+    private static bool _loggedBassUnavailable;
+
+    /// <summary>
+    /// 只打一次的"BASS 为什么用不了"诊断。
+    ///
+    /// ⚠️ 加它的原因(2026-10-06):日志里明明有 `[BassMusicPlayer] BASS 已就绪（版本 2.4.18.3）`,
+    ///    但播放走的一直是 AudioClip 路径的日志 —— 说明 <see cref="Bass"/> 返回了 null。
+    ///    这个属性原来是**静默** catch 的,失败时没有任何痕迹,只能靠猜。
+    ///    打一次就够,不会刷屏。
+    /// </summary>
+    private static void LogBassUnavailableOnce(string reason)
+    {
+        if (_loggedBassUnavailable) return;
+        _loggedBassUnavailable = true;
+        LightLogger.LogWarning($"[MusicPlayer] BASS 后端不可用，已回退 AudioClip 路径：{reason}");
+    }
+
     /// <summary>音频源所在的常驻物体（<c>DontDestroyOnLoad</c>）。</summary>
     private GameObject? _audioGo;
 
@@ -148,6 +204,17 @@ public sealed class MusicPlayer : MonoBehaviour
         {
             try
             {
+                // BASS 路径：它原生就有时间轴，不用我们自己算。
+                // ⚠️ **必须要求"BASS 正在驱动"**（IsPlaying 或 IsPaused）——
+                //    宿主 ready 不等于"当前这一首是 BASS 在放"。播放路径还没切过来时，
+                //    只要宿主 ready 就读 BASS 会拿到 0 → 进度条一直是 0:00（回归）。
+                var b = Bass;
+                if (b != null && (b.IsPlaying || b.IsPaused))
+                {
+                    double bt = b.Position;
+                    return (double.IsNaN(bt) || bt < 0d) ? 0f : (float)bt;
+                }
+
                 if (_source == null || _source.clip == null) return 0f;
                 float t = _source.time;
                 return (float.IsNaN(t) || t < 0f) ? 0f : t;
@@ -165,6 +232,15 @@ public sealed class MusicPlayer : MonoBehaviour
         {
             try
             {
+                // BASS 路径：流式播放时 clip.length 是不存在的，只能问 BASS。
+                // ⚠️ 同 Position：必须"BASS 正在驱动"才读，否则会盖掉 NAudio 路径的真实时长。
+                var b = Bass;
+                if (b != null && (b.IsPlaying || b.IsPaused))
+                {
+                    double bd = b.Duration;
+                    return (double.IsNaN(bd) || bd < 0d) ? 0f : (float)bd;
+                }
+
                 if (_source == null || _source.clip == null) return 0f;
                 float len = _source.clip.length;
                 return (float.IsNaN(len) || len < 0f) ? 0f : len;
@@ -265,6 +341,23 @@ public sealed class MusicPlayer : MonoBehaviour
             _source.bypassListenerEffects = true;   // ⚠️ 不被 AudioListener 的音量/低通滤镜影响，避免"糊/炸"
             _source.playOnAwake = false;
 
+            // ⚠️ BASS 播完的自动下一首**必须靠这个事件**：
+            //    `TickPlayback` 里判"是否播完"用的是 `_source.isPlaying` / `_source.time`，
+            //    而 BASS 路径下 `_source.clip` 是 null → 那一句 `if (_source.clip == null) return;`
+            //    会直接返回，**永远判不到结束** → 列表循环/随机播放会卡在最后一首不动。
+            //    BASS 自己知道什么时候放完，所以订阅它的 MediaEnded。
+            try
+            {
+                var bassHost = Light.Audio.BassMusicPlayer.Instance;
+                if (bassHost != null)
+                {
+                    bassHost.MediaEnded -= OnBassMediaEnded;   // 防重复订阅
+                    bassHost.MediaEnded += OnBassMediaEnded;
+                    LightLogger.Log("[MusicPlayer] 已订阅 BASS 播放结束事件（自动下一首）");
+                }
+            }
+            catch (Exception ex) { LightLogger.LogWarning($"[MusicPlayer] 订阅 BASS 事件失败: {ex.Message}"); }
+
             _library.Reload();
 
             LightLogger.Log($"[MusicPlayer] 已初始化（音量 {_targetVolume * 100f:F0}%，" +
@@ -299,7 +392,9 @@ public sealed class MusicPlayer : MonoBehaviour
             }
 
             // 正在播 → 暂停
-            if (_playing && _source != null && _source.isPlaying)
+            // ⚠️ BASS 路径下 `_source.isPlaying` 永远是 false（音乐不走 AudioSource），
+            //    只判它会导致"按一下不暂停"。所以补上"BASS 后端在驱动"这个条件。
+            if (_playing && ((_source != null && _source.isPlaying) || Bass != null))
             {
                 Pause();
                 return;
@@ -322,6 +417,21 @@ public sealed class MusicPlayer : MonoBehaviour
         {
             if (_source == null) return;
 
+            // ⚠️ BASS 路径要放在 `if (_source == null) return;` **之后但早于所有 _source 操作**：
+            //    BASS 播放时我们没给 _source 挂 clip，但 _source 对象本身是在的
+            //    （Initialize 里建的），所以能走到这里。真正要避开的是下面那串
+            //    对 _source 的音量/Pause 操作 —— 它们对 BASS 毫无作用。
+            var bass = Bass;
+            if (bass != null && (bass.IsPlaying || bass.IsPaused))
+            {
+                try { bass.Pause(); } catch { }
+                _fadeIn = false;
+                _fadeLeft = 0;
+                _paused = true;
+                LightLogger.Log($"[MusicPlayer] 已暂停（BASS）：{NowPlayingName}");
+                return;
+            }
+
             try { _source.volume = 0f; _source.mute = true; } catch { }
             try { _source.Pause(); } catch { }
 
@@ -342,6 +452,20 @@ public sealed class MusicPlayer : MonoBehaviour
     {
         try
         {
+            // ⚠️ BASS 路径优先：它内部已有"先归零再 Resume 再淡入"的防爆音处理，
+            //    不能落到下面那串对 _source 的操作（那些对 BASS 无效）。
+            var bass = Bass;
+            if (bass != null && bass.IsPaused)
+            {
+                try { bass.SetLoop(_loopMode == MusicLoopMode.SingleLoop); } catch { }
+                try { bass.SetVolume(_muted ? 0f : _targetVolume); } catch { }
+                try { bass.Resume(); } catch { }
+                _paused = false;
+                _playing = true;
+                LightLogger.Log($"[MusicPlayer] 已继续（BASS）：{NowPlayingName}");
+                return;
+            }
+
             if (_source == null || _source.clip == null)
             {
                 // 还没加载过任何东西 → 当成"从头播"
@@ -428,6 +552,9 @@ public sealed class MusicPlayer : MonoBehaviour
     {
         try
         {
+            // BASS 路径：它的 Loop 是流式的，单曲循环同样无缝
+            Bass?.SetLoop(_loopMode == MusicLoopMode.SingleLoop);
+
             if (_source == null) return;
             _source.loop = _loopMode == MusicLoopMode.SingleLoop;
         }
@@ -443,6 +570,10 @@ public sealed class MusicPlayer : MonoBehaviour
         try
         {
             _muted = !_muted;
+
+            // BASS 路径：它没有 mute 属性，用音量 0 表达（和 AudioSource.mute 等效）
+            Bass?.SetVolume(_muted ? 0f : _targetVolume);
+
             if (_source != null) _source.mute = _muted || _fadeLeft > 0;
             LightLogger.Log($"[MusicPlayer] 静音 = {_muted}");
         }
@@ -473,6 +604,14 @@ public sealed class MusicPlayer : MonoBehaviour
         try
         {
             _targetVolume = Mathf.Clamp01(value);
+
+            // ⚠️ BASS 路径**必须在这里立刻落地**，不能像 AudioSource 那样只写目标值等 TickFade。
+            //    原因：BASS 的淡入/音量是完全独立的一套（在 BassMusicPlayer 内部），
+            //    TickFade 只推 `_source.volume`，对 BASS 一点作用都没有 —— 只写目标值的话
+            //    拖动滑条会"只动数字不出声"。
+            //    同理 `_muted` 也要一起考虑，否则静音状态下拖音量会把声音放出来。
+            var bass = Bass;
+            if (bass != null) bass.SetVolume(_muted ? 0f : _targetVolume);
         }
         catch (Exception ex)
         {
@@ -583,11 +722,138 @@ public sealed class MusicPlayer : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// BASS 路径的加载 + 播放。**不解码**,直接把文件交给 BASS 流式播。
+    ///
+    /// 与 AudioClip 路径的分工：
+    ///   · 静音/淡入/换曲防爆音 → 全在 <see cref="Light.Audio.BassMusicPlayer"/> 内部做
+    ///     （它也是"先归零再操作"，和这里原来那套是同一个思路，不用重复一遍）
+    ///   · 这里只负责**状态机**：`_loading` / `_playing` / `_paused` / `_currentIndex` / `LastError`
+    ///     以及失败时的处理
+    /// </summary>
+    private IEnumerator CoLoadAndPlayBass(Light.Audio.BassMusicPlayer bass, int index)
+    {
+        try
+        {
+            var lib = _library;
+            var track = lib.GetAt(index);
+            if (track == null)
+            {
+                _loading = false;
+                yield break;
+            }
+
+            _currentIndex = index;
+            _loading = true;
+            _failedThisStep = false;
+            LastError = string.Empty;
+
+            bool done = false;
+            bool ok = false;
+
+            try
+            {
+                bass.SetLoop(_loopMode == MusicLoopMode.SingleLoop);
+                bass.LoadAndPlay(track.FullPath, _loopMode == MusicLoopMode.SingleLoop,
+                    _muted ? 0f : _targetVolume,
+                    r => { ok = r; done = true; });
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[MusicPlayer.CoLoadAndPlayBass]", ex);
+                done = true; ok = false;
+            }
+
+            // 等回调（BASS 的 LoadAsync 是异步的；用轮询而不是 await，避免同步上下文死锁）
+            while (!done) yield return null;
+
+            if (!ok)
+            {
+                _loading = false;
+                _playing = false;
+                _paused = false;
+                _failedThisStep = true;
+                LastError = bass.LastError;
+                LightLogger.LogWarning($"[MusicPlayer] BASS 播放失败：{track.DisplayName}（{LastError}）");
+                yield break;
+            }
+
+            _playing = true;
+            _paused = false;
+            _fadeIn = false;      // 淡入由 BassMusicPlayer 负责，这里的淡入标记保持关
+            _fadeLeft = 0;
+            _loading = false;
+
+            LightLogger.Log($"[MusicPlayer] 开始播放（BASS 流式）#{index + 1} {track.DisplayName}");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// BASS 播完一首 → 按循环模式决定下一步。
+    ///
+    /// 语义要和 `TickPlayback` 那条老路径**完全一致**（那边是 AudioClip 路径的判断）：
+    ///   · 单曲循环 → 不处理（BASS 的 `Loop = true` 会自己原样重播，天然无缝）
+    ///   · 否则取下一首；取不到就停
+    /// </summary>
+    private void OnBassMediaEnded()
+    {
+        try
+        {
+            if (_loopMode == MusicLoopMode.SingleLoop) return;   // 交给 BASS 的 Loop
+
+            // ⚠️⚠️ **防抖 + 状态守卫**（2026-10-06，用户报"切歌抽搐、只在非单曲循环下发生"）
+            //
+            //   日志里每 0.5~1 秒 #1/#2 互相切换 —— 因为 **LoadAsync 换曲时会为上一首抛 MediaEnded**，
+            //   我们这个处理器把它当成"这一首播完了" → RestartLoad() → 又抛 → **死循环**。
+            //   而单曲循环下第一句就 return 了，所以只有列表循环/随机播放会犯 ✓ 正是用户描述的现象。
+            //
+            //   三道守卫：
+            //     ① 正在加载中 → 忽略（换曲过程中抛出来的都是噪声）
+            //     ② 暂停中 → 忽略
+            //     ③ 距上次开始加载不到 1 秒 → 忽略（BASS 的 MediaEnded 可能在 LoadAsync 时立刻冒出来，
+            //        而一首歌不可能 1 秒内放完）
+            if (_loading) return;
+            if (_paused) return;
+            if (UnityEngine.Time.realtimeSinceStartup - _lastLoadStartTime < 1.0f) return;
+
+            if (_library.Count == 0) { _playing = false; return; }
+
+            int next = NextIndex(1, false);
+            if (next < 0)
+            {
+                _playing = false;
+                LightLogger.Log("[MusicPlayer] BASS 播放结束，没有下一首了");
+                return;
+            }
+
+            LightLogger.Log($"[MusicPlayer] 本曲播完 → 下一首 #{next + 1}（{LoopModeLabel(_loopMode)}）");
+            _pendingIndex = next;
+            RestartLoad();
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[MusicPlayer.OnBassMediaEnded] {ex.Message}");
+        }
+    }
+
+    /// <summary>最近一次开始加载的时刻（<c>Time.realtimeSinceStartup</c>），用于 MediaEnded 防抖。</summary>
+    private float _lastLoadStartTime = -999f;
+
     /// <summary>切到上下首（或首播）时重启加载协程。</summary>
     private void RestartLoad()
     {
         try
         {
+            // ⚠️ 防抖用的时间戳 + 先置 _loading：OnBassMediaEnded 靠这两个忽略
+            //    "换曲瞬间冒出来的 MediaEnded"（不加就是 #1/#2 每秒互切 = 抽搐）。
+            //    必须在起协程**之前**做，否则协程第一帧才置位，时间戳反而落后。
+            _lastLoadStartTime = UnityEngine.Time.realtimeSinceStartup;
+            _loading = true;
+
             if (_loadCo != null)
             {
                 try { StopCoroutine(_loadCo); } catch { }
@@ -617,6 +883,22 @@ public sealed class MusicPlayer : MonoBehaviour
     private IEnumerator CoLoadAndPlay()
     {
         int index = _pendingIndex;
+
+        // ①' **BASS 路径：流式加载，完全跳过 AudioClip 解码。**
+        //
+        //   原来那条路要把整首歌展开成 float[] 全塞进内存（`AudioClip.Create(..., stream:false)`
+        //   + `SetData`）—— 一首无损几百 MB。那既是用户报的"NAudio 容易炸"的来源，
+        //   也是大文件根本放不动的根因。BASS 是**流式**的，内存恒定。
+        //
+        //   ⚠️⚠️ **这一段必须放在"解码"之前**。放到后面（比如 `_source.clip = clip` 那一带）
+        //      就等于还是先把整首解码了一遍再换后端 —— 白花时间白占内存，
+        //      等于没换。这是这次改造的核心点。
+        var bass = Bass;
+        if (bass != null)
+        {
+            yield return CoLoadAndPlayBass(bass, index);
+            yield break;
+        }
 
         // ① 先安静下来
         try

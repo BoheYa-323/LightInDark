@@ -47,7 +47,40 @@ namespace Light.Audio
 
         private static BassMusicPlayer? _instance;
 
-        public static BassMusicPlayer? Instance => _instance;
+        /// <summary>
+        /// 宿主实例。**自愈**:被销毁了就重建,而不是返回 null 让上层静默回退。
+        ///
+        /// ⚠️⚠️ 为什么必须自愈（2026-10-06 实机日志）：
+        /// <code>
+        /// 10:12:28  [BassMusicPlayer] BASS 已就绪（版本 2.4.18.3）…      ← 宿主建起来了
+        /// 10:13:04  [MusicPlayer] BASS 后端不可用：BassMusicPlayer.Instance == null
+        /// </code>
+        /// 36 秒后 <c>_instance</c> 变成了 null —— 说明 <c>OnDestroy</c> 跑过。
+        /// 同一个现象在 <c>LightTicker</c> 上也出现（那个"已启动"日志在日志里出现 **8 次**）：
+        /// **本该 <c>DontDestroyOnLoad</c> 常驻的对象被销毁,然后被重建。**
+        ///
+        /// 原来的写法只返回 null,后果是**整条 BASS 链路静默失效** ——
+        /// 13 处接线全部退回 AudioClip 路径,而日志里只留下一行容易被忽略的 warning。
+        /// 现在改成:发现没了就当场重建,让"BASS 后端"这个能力**不依赖宿主对象的寿命**。
+        ///
+        /// ⚠️ Unity 的"假 null":对象被 <c>Destroy</c> 后托管引用还在,但
+        ///    <c>!= null</c>（Unity 重载的 <c>operator==</c>）会判为 null ✓ 所以这里判得住。
+        /// </summary>
+        public static BassMusicPlayer? Instance
+        {
+            get
+            {
+                try
+                {
+                    if (_instance != null) return _instance;
+
+                    // 没了（或被场景销毁成假 null）→ 重建
+                    Ensure();
+                    return _instance;
+                }
+                catch { return _instance; }
+            }
+        }
 
         /// <summary>
         /// ⚠️⚠️ **必须在静态构造函数里注册 IL2CPP 类型** —— 见类注释 ①。
@@ -86,6 +119,24 @@ namespace Light.Audio
         // ------------------------------------------------------------------
 
         private MediaPlayer? _player;
+
+        /// <summary>
+        /// **进程级的 BASS 播放器**（静态）。
+        ///
+        /// ⚠️ 为什么必须是静态的（2026-10-06 实机日志）：日志显示宿主对象**会被反复销毁重建**
+        /// <code>
+        /// 10:15:15  [BassMusicPlayer] BASS 已就绪（版本 2.4.18.3）…
+        /// 10:15:16  [BassMusicPlayer] 宿主被销毁（场景=）
+        /// 10:15:55  [BassMusicPlayer] 宿主被销毁（场景=MainMenu）
+        /// </code>
+        /// 如果 `MediaPlayer` 跟着宿主走，每次销毁就等于**丢掉正在播放的那首歌** ——
+        /// 表现就是"切场景音乐断了"。放在静态字段里，宿主只是"驱动者"，
+        /// **播放器本身活在进程级**，重建宿主不会丢播放状态。
+        ///
+        /// ⚠️ 同理 `Bass.Init()` 也只能成功一次（第二次返回 `Errors.Already`），
+        ///    已在 `Awake` 里容忍。
+        /// </summary>
+        private static MediaPlayer? _sharedPlayer;
         private bool _bassReady;
         private int _requestId;             // 用于丢弃"过期的加载"（快速连点切歌）
 
@@ -160,7 +211,24 @@ namespace Light.Audio
 
                 // ---- 初始化 BASS ----
                 // 注意 Bass.Init() 走 [DllImport("bass")] → 必须先 PrepareBass()（Ensure 里已做）
-                if (!Bass.Init())
+                //
+                // ⚠️⚠️ **必须容忍 `Errors.Already`**（2026-10-06 实机日志）：
+                // <code>
+                // [MusicPlayer] BASS 后端不可用：宿主在但 IsReady=false
+                //               （LastError=Bass.Init 失败，Bass.LastError=Already）
+                // </code>
+                // BASS 是**进程级全局库**，`Init()` 只能成功一次。宿主被销毁后自愈重建时
+                // 再调一次就会返回 false + `LastError=Already` —— 那不是错误，
+                // **恰恰说明设备已经初始化好了，可以直接复用**。
+                // 原来没判这一条 → 重建后的宿主 `_bassReady = false` → BASS 永久不可用。
+                bool initOk = Bass.Init();
+                if (!initOk && Bass.LastError == ManagedBass.Errors.Already)
+                {
+                    initOk = true;
+                    LightLogger.Log("[BassMusicPlayer] Bass.Init 返回 Already —— BASS 已初始化过，直接复用");
+                }
+
+                if (!initOk)
                 {
                     LastError = $"Bass.Init 失败，Bass.LastError={Bass.LastError}";
                     LightLogger.LogError($"[BassMusicPlayer] {LastError}（依赖库在 {NativeLibraryLoader.LibrariesDir}）");
@@ -168,9 +236,15 @@ namespace Light.Audio
                     return;
                 }
 
-                _player = new MediaPlayer();
-                _player.MediaEnded += OnMediaEnded;
-                _player.MediaFailed += OnMediaFailed;
+                // ⚠️ MediaPlayer 放在**静态**字段里：宿主被销毁重建时不会丢播放状态，
+                //    切场景也就不再断音。见 _sharedPlayer 的注释。
+                if (_sharedPlayer == null)
+                {
+                    _sharedPlayer = new MediaPlayer();
+                    _sharedPlayer.MediaEnded += OnMediaEndedStatic;
+                    _sharedPlayer.MediaFailed += OnMediaFailedStatic;
+                }
+                _player = _sharedPlayer;
 
                 _bassReady = true;
                 LightLogger.Log($"[BassMusicPlayer] BASS 已就绪（版本 {Bass.Version}），播放器宿主 = LID_BassMusicPlayer（DontDestroyOnLoad）");
@@ -183,7 +257,23 @@ namespace Light.Audio
             }
         }
 
-        private void OnMediaEnded(object? sender, EventArgs e)
+        /// <summary>
+        /// ⚠️ 这两个是**静态**的 —— 因为 <see cref="_sharedPlayer"/> 是静态的、只订阅一次，
+        /// 而宿主对象会被销毁重建。静态处理器再转发给当前实例（<c>_instance</c> 可能为 null，
+        /// 那时"播完"这件事就没人接了 —— 但下一次访问会自愈重建，不算致命）。
+        /// </summary>
+        private static void OnMediaEndedStatic(object? sender, EventArgs e)
+        {
+            try { _instance?.HandleMediaEnded(); }
+            catch (Exception ex) { LightLogger.LogWarning($"[BassMusicPlayer.OnMediaEndedStatic] {ex.Message}"); }
+        }
+
+        private static void OnMediaFailedStatic(object? sender, EventArgs e)
+        {
+            LightLogger.LogWarning($"[BassMusicPlayer] 媒体播放失败（Bass.LastError={Bass.LastError}）");
+        }
+
+        private void HandleMediaEnded()
         {
             try
             {
@@ -193,22 +283,26 @@ namespace Light.Audio
                 try { loop = _player != null && _player.Loop; } catch { }
                 if (!loop) MediaEnded?.Invoke();
             }
-            catch (Exception ex) { LightLogger.LogWarning($"[BassMusicPlayer.OnMediaEnded] {ex.Message}"); }
-        }
-
-        private void OnMediaFailed(object? sender, EventArgs e)
-        {
-            LightLogger.LogWarning($"[BassMusicPlayer] 媒体播放失败（Bass.LastError={Bass.LastError}）");
+            catch (Exception ex) { LightLogger.LogWarning($"[BassMusicPlayer.HandleMediaEnded] {ex.Message}"); }
         }
 
         private void OnDestroy()
         {
             try
             {
+                // ⚠️ 打这条是为了抓"谁把它销毁了"：本该 DontDestroyOnLoad 常驻的对象
+                //    如果频繁出现这条日志，说明有东西在反复销毁/重建它（LightTicker 上出现过 8 次）。
+                LightLogger.LogWarning($"[BassMusicPlayer] 宿主被销毁（场景={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}）—— Instance 会在下次访问时自愈重建");
+
                 if (_instance == this) _instance = null;
-                Stop();
-                // ⚠️ 这里**不** Bass.Free()：宿主理论上会活到游戏退出，
-                //    而 Free 之后再次 Init 有状态残留风险。真要释放交给进程退出。
+
+                // ⚠️⚠️ **绝对不要在这里 Stop()！**（2026-10-06 修正）
+                //    宿主只是"驱动者"，真正的播放器是进程级的 `_sharedPlayer`。
+                //    原来这里调了 `Stop()` → 宿主一被销毁就把音乐停了 ——
+                //    这正是"切场景音乐断掉"的直接原因（日志里宿主在场景切换时会被销毁）。
+                //    现在宿主死了音乐照放，下次访问自愈重建一个新的驱动者接上去。
+                //
+                // ⚠️ 这里也**不** Bass.Free()：BASS 是进程级的，Free 之后再次 Init 有状态残留风险。
             }
             catch { }
         }

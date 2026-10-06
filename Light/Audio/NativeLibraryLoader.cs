@@ -45,6 +45,67 @@ namespace Light.Audio
 
         private static bool _extracted;
         private static bool _bassLoaded;
+        private static bool _resolveHooked;
+
+        /// <summary>
+        /// 挂 <see cref="AppDomain.AssemblyResolve"/>,让 <c>ManagedBass.dll</c> 这类**托管**依赖
+        /// 也能从 <see cref="LibrariesDir"/> 解析。
+        ///
+        /// ⚠️⚠️ **不加这个就会失败**（2026-10-06 实机日志）：
+        /// <code>
+        /// [Warning] [BassMusicPlayer] IL2CPP 类型注册失败:
+        ///           Could not load file or assembly 'ManagedBass, Version=3.0.0.0, ...'
+        ///           系统找不到指定的文件。
+        /// </code>
+        /// 原因:<c>Libs\*.dll</c> 是以 <c>&lt;Private&gt;false&lt;/Private&gt;</c> 引用的 ——
+        /// **只用于编译,不会拷到运行时目录**。原生 <c>bass.dll</c> 靠
+        /// <see cref="PrepareBass"/> 的 <c>NativeLibrary.Load</c> 解决了,但托管程序集
+        /// 走的是 CLR 的程序集解析,**BepInEx 不看 <c>Light_Libraries</c>** →
+        /// 必须自己挂解析器。
+        ///
+        /// ⚠️ **必须在任何 <c>ManagedBass</c> 类型被触碰之前挂上**。
+        ///    <see cref="BassMusicPlayer"/> 的静态构造函数里有
+        ///    <c>ClassInjector.RegisterTypeInIl2Cpp&lt;BassMusicPlayer&gt;()</c>,
+        ///    它会反射该类型的所有字段 → 立刻需要 <c>ManagedBass</c>。
+        ///    而那个静态构造函数在 <c>BassMusicPlayer.Ensure()</c> 里被触发,
+        ///    <c>Ensure()</c> 又会先调 <see cref="PrepareBass"/> —— 顺序是对的。
+        /// </summary>
+        private static void HookAssemblyResolve()
+        {
+            if (_resolveHooked) return;
+            _resolveHooked = true;      // 先置位,避免重入时挂两次
+
+            try
+            {
+                AppDomain.CurrentDomain.AssemblyResolve += (_, args) =>
+                {
+                    try
+                    {
+                        var simpleName = new AssemblyName(args.Name).Name;
+                        if (string.IsNullOrEmpty(simpleName)) return null;
+
+                        var path = Path.Combine(LibrariesDir, simpleName + ".dll");
+                        if (File.Exists(path))
+                        {
+                            var asm = Assembly.LoadFrom(path);
+                            LightLogger.Log($"[NativeLibraryLoader] 已解析程序集 {simpleName} → {path}");
+                            return asm;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LightLogger.LogWarning($"[NativeLibraryLoader] 解析程序集失败 {args.Name}: {ex.Message}");
+                    }
+                    return null;
+                };
+
+                LightLogger.Log($"[NativeLibraryLoader] 已挂上 AssemblyResolve（从 {LibrariesDir} 解析托管依赖）");
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[NativeLibraryLoader.HookAssemblyResolve]", ex);
+            }
+        }
 
         /// <summary>释放是否成功过(供诊断)。</summary>
         public static bool Extracted => _extracted;
@@ -146,6 +207,11 @@ namespace Light.Audio
             try
             {
                 if (!EnsureExtracted()) return false;
+
+                // ⚠️⚠️ **托管依赖的解析器必须在这里挂上** —— 早于任何 ManagedBass 类型被触碰。
+                //    详见 HookAssemblyResolve 的注释（不加就是 "Could not load file or assembly
+                //    'ManagedBass'"）。
+                HookAssemblyResolve();
 
                 var dir = LibrariesDir;
                 var bassPath = Path.Combine(dir, "bass.dll");
