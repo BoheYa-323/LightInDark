@@ -583,7 +583,6 @@ namespace Light.UI.Config
         {
             try
             {
-                // 原版 GameOptionsMenu 的真正内容容器 settingsContainer
                 var menu = _templates;
                 if (menu != null)
                 {
@@ -591,10 +590,6 @@ namespace Light.UI.Config
                     if (sc != null)
                     {
                         var vp = uiCam.WorldToViewportPoint(sc.position);
-                        LightLogger.Log($"[ConfigUIPanel.Diag] 原版 settingsContainer '{sc.name}' " +
-                                        $"localPos={sc.localPosition} worldPos={sc.position} " +
-                                        $"lossyScale={sc.lossyScale} layer={sc.gameObject.layer} " +
-                                        $"childCount={sc.childCount} → viewport=({vp.x:F3},{vp.y:F3},{vp.z:F3})");
                     }
 
                     var children = menu.Children;
@@ -606,11 +601,6 @@ namespace Light.UI.Config
                             if (ob == null) continue;
                             var vp = uiCam.WorldToViewportPoint(ob.transform.position);
                             var sr = ob.GetComponentInChildren<SpriteRenderer>(true);
-                            LightLogger.Log($"[ConfigUIPanel.Diag] 原版行[{i}] {ob.name} " +
-                                            $"localPos={ob.transform.localPosition} worldPos={ob.transform.position} " +
-                                            $"lossyScale={ob.transform.lossyScale} active={ob.gameObject.activeInHierarchy} " +
-                                            $"→ viewport=({vp.x:F3},{vp.y:F3},{vp.z:F3}) " +
-                                            $"sr={(sr == null ? "无" : $"{sr.name}/{sr.sortingLayerName}#{sr.sortingOrder}")}");
                         }
                     }
                     else
@@ -658,19 +648,12 @@ namespace Light.UI.Config
                 var srs = t.GetComponents<SpriteRenderer>();
                 foreach (var sr in srs)
                 {
-                    LightLogger.Log($"[ConfigUIPanel.Diag] {pad}SR {t.name} active={sr.enabled}/{sr.gameObject.activeInHierarchy} " +
-                                    $"sprite={(sr.sprite == null ? "null" : sr.sprite.name)} color={sr.color} " +
-                                    $"size={sr.size} drawMode={sr.drawMode} sortingLayer={sr.sortingLayerName}#{sr.sortingOrder} " +
-                                    $"sortingLayerID={sr.sortingLayerID} bounds={sr.bounds.size}");
                 }
 
                 var tmps = t.GetComponents<TextMeshPro>();
                 foreach (var tmp in tmps)
                 {
                     var mr = tmp.GetComponent<MeshRenderer>();
-                    LightLogger.Log($"[ConfigUIPanel.Diag] {pad}TMP {t.name} active={tmp.enabled}/{tmp.gameObject.activeInHierarchy} " +
-                                    $"text=\"{tmp.text}\" color={tmp.color} fontSize={tmp.fontSize} " +
-                                    $"mr={(mr == null ? "无" : $"enabled={mr.enabled} sortingLayer={mr.sortingLayerName}#{mr.sortingOrder}")}");
                 }
 
                 for (int i = 0; i < t.childCount; i++)
@@ -690,45 +673,22 @@ namespace Light.UI.Config
         {
             try
             {
-                LightLogger.Log($"[ConfigUIPanel.Diag] 注册块数={ConfigRegistry.Blocks.Count} 配置项数={ConfigRegistry.All.Count} " +
-                                $"可见块={System.Linq.Enumerable.Count(ConfigRegistry.Blocks, b => MatchesFilter(b))}");
-
-                foreach (var b in ConfigRegistry.Blocks)
-                {
-                    var items = new System.Text.StringBuilder();
-                    foreach (var it in b.Items)
-                        items.Append($"[{it.Key} {it.Type} 值={it.GetValueText()} vis={it.IsVisible}] ");
-                    LightLogger.Log($"[ConfigUIPanel.Diag] 块 {b.Key} 分类={b.Category} " +
-                                    $"过滤通过={MatchesFilter(b)} 项={items}");
-                }
-
                 if (_page == null) { LightLogger.Log("[ConfigUIPanel.Diag] _page 为 null"); return; }
 
-                // ⚠️ 决定性检查：我们的内容在相机前方吗？
-                // WorldToViewportPoint 的 z 为负 = 在相机**背后** → 一定不渲染。
                 var uiCam = FindUICamera();
                 if (uiCam != null)
                 {
                     var vp = uiCam.WorldToViewportPoint(_page.transform.position);
-                    LightLogger.Log($"[ConfigUIPanel.Diag] 视口检查(UI相机 {uiCam.name}) cam.worldPos={uiCam.transform.position} " +
-                                    $"cam.near={uiCam.nearClipPlane} cam.far={uiCam.farClipPlane} | " +
-                                    $"page.worldPos={_page.transform.position} → viewport=({vp.x:F3},{vp.y:F3},{vp.z:F3}) " +
-                                    $"在相机前方={vp.z > 0f} 在视口内={(vp.x >= 0f && vp.x <= 1f && vp.y >= 0f && vp.y <= 1f && vp.z > 0f)}");
 
                     // 对照：原版角色页自己的内容在哪（同相机下）
                     if (_templates != null)
                     {
                         var vpT = uiCam.WorldToViewportPoint(_templates.transform.position);
-                        LightLogger.Log($"[ConfigUIPanel.Diag] 对照原版 {_templates.name} worldPos={_templates.transform.position} " +
-                                        $"→ viewport=({vpT.x:F3},{vpT.y:F3},{vpT.z:F3}) 在相机前方={vpT.z > 0f}");
                     }
 
-                    // ⚠️ 决定性对照：原版**可见**的设置行在哪（它就是我们要对齐的目标）。
-                    // 抓原版 GameOptionsMenu 已建好的子行，看它们的 worldPos / 父容器 z。
                     DumpVisibleVanillaRow(uiCam);
                 }
 
-                // 把所有"可能盖住我们"的渲染器按 z 排序打出来（同层竞争者）
                 try
                 {
                     var parentRoot = _page.transform.root;
@@ -744,7 +704,6 @@ namespace Light.UI.Config
                     list.Sort((a, b) => a.z.CompareTo(b.z));
                     foreach (var e in list)
                     {
-                        LightLogger.Log($"[ConfigUIPanel.Diag] 同层SR(z排序) {e.info}");
                         if (++shown >= 30) break;
                     }
                 }
@@ -756,12 +715,7 @@ namespace Light.UI.Config
                 // 父链 4 层
                 var cur = _page.transform;
                 for (int d = 0; cur != null && d < 5; d++, cur = cur.parent)
-                    LightLogger.Log($"[ConfigUIPanel.Diag] 父链[{d}] {cur.name} active={cur.gameObject.activeSelf} " +
-                                    $"activeInHierarchy={cur.gameObject.activeInHierarchy} layer={cur.gameObject.layer} " +
-                                    $"localPos={cur.localPosition} worldPos={cur.position} localScale={cur.localScale}");
 
-                LightLogger.Log($"[ConfigUIPanel.Diag] _page activeInHierarchy={_page.activeInHierarchy} " +
-                                $"childCount={_page.transform.childCount}");
 
                 // 逐个打印我们建的子物体
                 for (int i = 0; i < _page.transform.childCount; i++)
@@ -770,11 +724,6 @@ namespace Light.UI.Config
                     if (c == null) continue;
                     var sr = c.GetComponent<SpriteRenderer>();
                     var tmp = c.GetComponentInChildren<TextMeshPro>(true);
-                    LightLogger.Log($"[ConfigUIPanel.Diag]  子[{i}] {c.name} active={c.gameObject.activeInHierarchy} " +
-                                    $"layer={c.gameObject.layer} localPos={c.localPosition} " +
-                                    $"worldPos={c.position} lossyScale={c.lossyScale} " +
-                                    $"sr={(sr == null ? "无" : $"sprite={(sr.sprite == null ? "null" : sr.sprite.name)} size={sr.size} color={sr.color} sortingOrder={sr.sortingOrder}")} " +
-                                    $"tmp={(tmp == null ? "无" : $"\"{tmp.text}\" enabled={tmp.enabled}")}");
 
                     // 递归打印行的完整层级（含每个渲染器）—— 定位"为什么画不出来"
                     DumpHierarchy(c, 1);
@@ -785,8 +734,6 @@ namespace Light.UI.Config
                 {
                     if (cam == null) continue;
                     bool has5 = (cam.cullingMask & (1 << 5)) != 0;
-                    LightLogger.Log($"[ConfigUIPanel.Diag] 相机 {cam.name} depth={cam.depth} cullingMask={cam.cullingMask} 含layer5={has5} " +
-                                    $"ortho={cam.orthographic} size={cam.orthographicSize}");
                 }
             }
             catch (Exception ex)
@@ -956,29 +903,13 @@ namespace Light.UI.Config
             }
         }
 
-        // =====================================================================
-        //  原版行控件渲染（方案 B）
-        //
-        //  克隆源不是场景里现成的行，而是 GameOptionsMenu 上的私有 [SerializeField]
-        //  预制体字段（interop 里是属性）：
-        //     checkboxOrigin / numberOptionOrigin / stringOptionOrigin / categoryHeaderOrigin
-        //  ⚠️ 别再回退成 GetComponentInChildren<ToggleOption>()：规则页的行要到
-        //     CreateSettings() 才存在，那之前场景里一个都没有（这是上一版"啥也没看到"的原因之一）。
-        //
-        //  原版控件的 Initialize/FixedUpdate/Increase/Decrease/UpdateValue 都依赖
-        //  data(BaseGameSetting)，自定义配置项没有 → 由 ConfigRowPatches 按实例 ID 拦截。
-        // =====================================================================
-
-        /// <summary>实例 ID → 配置项。原版控件的 prefix 靠它认出"这行是我的"。</summary>
         internal static readonly Dictionary<int, ConfigItem> RowMap = new();
 
-        /// <summary>模板源（提供私有预制体字段的原版菜单）。</summary>
         private static GameOptionsMenu _templates;
 
         /// <summary>模板源是否已就绪。</summary>
         public static bool TemplatesReady => _templates != null;
 
-        /// <summary>登记模板源；到位后若面板已建但一行都没成，补建一次。</summary>
         internal static void SetTemplateSource(GameOptionsMenu menu)
         {
             if (menu == null) return;
