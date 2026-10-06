@@ -29,6 +29,15 @@ public partial class LIDPlugin : BasePlugin
     public static string AUVersion;
     public override void Load()
     {
+        // ⚠️ 把 BepInEx 日志源接到 LightLogger（非 Info 级别**同步**转发）。
+        //    主插件也会接一次（覆盖这里）—— 两边都接是为了"只装 API 时也能转发"。
+        try
+        {
+            LightInDark.Core.LightLogger.BepInExInfo = m => Log.LogInfo(m);
+            LightInDark.Core.LightLogger.BepInExWarning = m => Log.LogWarning(m);
+            LightInDark.Core.LightLogger.BepInExError = m => Log.LogError(m);
+        }
+        catch { }
         try
         {
             Harmony.PatchAll();

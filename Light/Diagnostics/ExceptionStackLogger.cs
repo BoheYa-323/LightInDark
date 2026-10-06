@@ -51,7 +51,7 @@ public static class ExceptionStackLogger
             Action<string, string, LogType> handler = OnLog;
             Application.add_logMessageReceived(handler);
 
-            LightLogger.Log("[异常堆栈] 已订阅 Application.logMessageReceived —— " +
+            LightLogger.LogDebug("[异常堆栈] 已订阅 Application.logMessageReceived —— " +
                             "之后任何异常都会连完整堆栈写进本日志（每种只打一次）");
         }
         catch (Exception ex)

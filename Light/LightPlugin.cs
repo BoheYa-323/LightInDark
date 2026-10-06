@@ -57,6 +57,18 @@ public partial class LightPlugin : BasePlugin
             //FirstChanceExceptionLogger.Initialize();
             StaticLog = Log; // BepInEx日志
 
+            // ⚠️ 把 BepInEx 日志源接到 LightLogger 上（用户 2026-10-06 要求）：
+            //    Info（且 toBepInEx=true）/ Warning / Error / Debug 都会**同步**转到 BepInEx 日志。
+            //    LightLogger 定义在 API 程序集里，不能直接引用主插件的 ManualLogSource
+            //    （循环依赖），所以走委托钩子。
+            try
+            {
+                LightInDark.Core.LightLogger.BepInExInfo = m => Log.LogInfo(m);
+                LightInDark.Core.LightLogger.BepInExWarning = m => Log.LogWarning(m);
+                LightInDark.Core.LightLogger.BepInExError = m => Log.LogError(m);
+            }
+            catch { }
+
             // 订阅 Unity 的日志回调，把异常的**完整堆栈**记进 LightLog.log。
             // 之前 BepInEx 控制台里只有一行 "NullReferenceException: Object reference..."，
             // 没有 at Xxx.Yyy()，刷屏几千行根本定位不到。见 ExceptionStackLogger 的注释。

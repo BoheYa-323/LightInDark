@@ -88,7 +88,7 @@ namespace Light.Audio
                         if (File.Exists(path))
                         {
                             var asm = Assembly.LoadFrom(path);
-                            LightLogger.Log($"[NativeLibraryLoader] 已解析程序集 {simpleName} → {path}");
+                            LightLogger.LogDebug($"[NativeLibraryLoader] 已解析程序集 {simpleName} → {path}");
                             return asm;
                         }
                     }
@@ -99,7 +99,7 @@ namespace Light.Audio
                     return null;
                 };
 
-                LightLogger.Log($"[NativeLibraryLoader] 已挂上 AssemblyResolve（从 {LibrariesDir} 解析托管依赖）");
+                LightLogger.LogDebug($"[NativeLibraryLoader] 已挂上 AssemblyResolve（从 {LibrariesDir} 解析托管依赖）");
             }
             catch (Exception ex)
             {
@@ -135,7 +135,7 @@ namespace Light.Audio
                 if (a)
                 {
                     _extracted = true;
-                    LightLogger.Log($"[NativeLibraryLoader] 依赖库已就绪：{dir}" +
+                    LightLogger.LogDebug($"[NativeLibraryLoader] 依赖库已就绪：{dir}" +
                                     $"（bass.dll={(a ? "OK" : "缺失")} ManagedBass.dll={(b ? "OK" : "缺失")}）");
                     return true;
                 }
@@ -178,7 +178,7 @@ namespace Light.Audio
                 using (var fs = File.Create(targetPath))
                     stream.CopyTo(fs);
 
-                LightLogger.Log($"[NativeLibraryLoader] 已释放 {Path.GetFileName(targetPath)} " +
+                LightLogger.LogDebug($"[NativeLibraryLoader] 已释放 {Path.GetFileName(targetPath)} " +
                                 $"({stream.Length:N0} B) → {targetPath}");
                 return true;
             }
@@ -226,7 +226,7 @@ namespace Light.Audio
                     {
                         NativeLibrary.Load(bassPath);
                         _bassLoaded = true;
-                        LightLogger.Log($"[NativeLibraryLoader] bass.dll 已加载：{bassPath}");
+                        LightLogger.LogDebug($"[NativeLibraryLoader] bass.dll 已加载：{bassPath}");
                         return true;
                     }
                 }

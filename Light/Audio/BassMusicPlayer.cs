@@ -225,7 +225,7 @@ namespace Light.Audio
                 if (!initOk && Bass.LastError == ManagedBass.Errors.Already)
                 {
                     initOk = true;
-                    LightLogger.Log("[BassMusicPlayer] Bass.Init 返回 Already —— BASS 已初始化过，直接复用");
+                    LightLogger.LogDebug("[BassMusicPlayer] Bass.Init 返回 Already —— BASS 已初始化过，直接复用");
                 }
 
                 if (!initOk)
@@ -247,7 +247,7 @@ namespace Light.Audio
                 _player = _sharedPlayer;
 
                 _bassReady = true;
-                LightLogger.Log($"[BassMusicPlayer] BASS 已就绪（版本 {Bass.Version}），播放器宿主 = LID_BassMusicPlayer（DontDestroyOnLoad）");
+                LightLogger.LogDebug($"[BassMusicPlayer] BASS 已就绪（版本 {Bass.Version}），播放器宿主 = LID_BassMusicPlayer（DontDestroyOnLoad）");
             }
             catch (Exception ex)
             {

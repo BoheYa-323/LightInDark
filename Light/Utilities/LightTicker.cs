@@ -88,7 +88,7 @@ namespace Light.Utilities
                 catch (Exception ex)
                 {
                     // 已注册过会抛，忽略即可（和 MusicPlayer 一样的写法）
-                    LightLogger.Log($"[LightTicker] 类型注册（可能已注册）：{ex.Message}");
+                    LightLogger.LogDebug($"[LightTicker] 类型注册（可能已注册）：{ex.Message}");
                 }
 
                 var go = new GameObject(ObjectName);
@@ -122,7 +122,7 @@ namespace Light.Utilities
                     return;
                 }
 
-                LightLogger.Log("[LightTicker] 跨场景每帧驱动器已启动");
+                LightLogger.LogDebug("[LightTicker] 跨场景每帧驱动器已启动");
             }
             catch (Exception ex)
             {
