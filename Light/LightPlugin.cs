@@ -139,6 +139,17 @@ public partial class LightPlugin : BasePlugin
             //    而 MainMenuManager 只在 MainMenu 场景存在 → MatchMaking / FindAGame 里从不运行
             //    （背景图/音频在那两个场景"没有"就是因为这个）。见 LightTicker 的注释。
             try { Light.Utilities.LightTicker.Ensure(); } catch { }
+
+            // 依赖库释放：把嵌入的 bass.dll / ManagedBass.dll 抽到 <游戏根目录>\Light_Libraries，
+            // 并在第一次用 BASS 之前把它加载起来。见 NativeLibraryLoader 的注释。
+            // ⚠️ 必须在任何 Bass.* 调用之前 —— 所以放在这里（早于音乐播放器初始化）。
+            try { Light.Audio.NativeLibraryLoader.PrepareBass(); } catch { }
+
+            // BASS 播放器宿主（DontDestroyOnLoad → 切场景不断音）。
+            // ⚠️ 它会先 PrepareBass() 再 Bass.Init()，顺序不能反 —— 见 BassMusicPlayer 类注释 ③。
+            // ⚠️ 这个类的 IL2CPP 类型注册写在**静态构造函数**里（LightTicker 就是漏了那一步
+            //    导致 AddComponent 抛异常、整个驱动器从没被创建过）。
+            try { Light.Audio.BassMusicPlayer.Ensure(); } catch { }
             ChatHistoryLogUtils.Init(); // 聊天历史记录。
 
             // 握手验证暂停 2026-09-26

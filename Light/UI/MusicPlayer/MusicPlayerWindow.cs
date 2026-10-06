@@ -270,7 +270,7 @@ public sealed class MusicPlayerWindow : MonoBehaviour
     private MetaScreen? _screen;
     private GameObject? _windowObj;
 
-    private MusicPlayer? _player;
+    private MusicPlayer? _player;   // ⚠️ 别再用 global:: 限定：MusicPlayer 类就在 Light.UI.MusicPlayer 命名空间里，加限定反而解析不到
 
     private bool _built;
     private bool _showing;
