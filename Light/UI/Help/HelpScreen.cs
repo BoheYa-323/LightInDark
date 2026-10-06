@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LightInDark;
 using LightInDark.Configuration;
 using LightInDark.Game;
@@ -83,7 +84,10 @@ public static class HelpScreen
                 _lastScreen = null;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[HelpScreen.TryCloseHelpScreen]", ex);
+        }
     }
 
     /// <summary>当前有效页签（MyInfo 仅游戏中已分配角色时显示）</summary>
@@ -189,7 +193,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildTabWidget]", ex); return default;
+            LightLogger.LogError("[HelpScreen.BuildTabWidget]", ex); return BuildErrorWidget();
         }
     }
 
@@ -212,7 +216,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildTabsWidget]", ex); return default;
+            LightLogger.LogError("[HelpScreen.BuildTabsWidget]", ex); return BuildErrorWidget();
         }
     }
 
@@ -242,7 +246,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowPlaceholderScreen]", ex); return default;
+            LightLogger.LogError("[HelpScreen.ShowPlaceholderScreen]", ex); return BuildErrorWidget();
         }
     }
 
@@ -266,7 +270,7 @@ public static class HelpScreen
             void AddCategory(RoleCategory category, string title, Color titleColor)
             {
                 var roles = new List<RoleTemplate>();
-                foreach (var role in RoleRegistry.AllRoles)
+                foreach (var role in SortedRoles())
                     if (role.RoleCategory == category) roles.Add(role);
                 if (roles.Count == 0) return;
 
@@ -296,7 +300,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowAssignableScreen]", ex); return default;
+            LightLogger.LogError("[HelpScreen.ShowAssignableScreen]", ex); return BuildErrorWidget();
         }
     }
 
@@ -329,7 +333,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowMyRolesScreen]", ex); return default;
+            LightLogger.LogError("[HelpScreen.ShowMyRolesScreen]", ex); return BuildErrorWidget();
         }
     }
 
@@ -366,7 +370,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowSearchScreen]", ex); return default;
+            LightLogger.LogError("[HelpScreen.ShowSearchScreen]", ex); return BuildErrorWidget();
         }
     }
 
@@ -386,7 +390,7 @@ public static class HelpScreen
             }
 
             var matched = new List<RoleTemplate>();
-            foreach (var role in RoleRegistry.AllRoles)
+            foreach (var role in SortedRoles())
             {
                 if (role.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
                     role.DescribeText.Contains(keyword, StringComparison.OrdinalIgnoreCase))
@@ -414,7 +418,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildSearchResultWidget]", ex); return default;
+            LightLogger.LogError("[HelpScreen.BuildSearchResultWidget]", ex); return BuildErrorWidget();
         }
     }
 
@@ -443,7 +447,7 @@ public static class HelpScreen
                 var column = new List<GUIWidget?>();
                 column.Add(gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentTitle), title));
                 column.Add(gui.VerticalMargin(0.15f));
-                foreach (var role in RoleRegistry.AllRoles)
+                foreach (var role in SortedRoles())
                 {
                     if (role.RoleCategory != category) continue;
                     column.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard),
@@ -474,7 +478,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowPreviewScreen]", ex); return default;
+            LightLogger.LogError("[HelpScreen.ShowPreviewScreen]", ex); return BuildErrorWidget();
         }
     }
 
@@ -545,7 +549,10 @@ public static class HelpScreen
                     AddLine(Language.Translate("options.visualTasks", "视觉任务"), GetBoolValue("VisualTasks"));
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                LightLogger.LogError("[HelpScreen.ShowOptionsScreen.Options]", ex);
+            }
 
             if (inner.Count == 0)
                 inner.Add(gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
@@ -556,7 +563,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowOptionsScreen]", ex); return default;
+            LightLogger.LogError("[HelpScreen.ShowOptionsScreen]", ex); return BuildErrorWidget();
         }
     }
 
@@ -660,7 +667,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildRoleDetailWidget]", ex); return default;
+            LightLogger.LogError("[HelpScreen.BuildRoleDetailWidget]", ex); return BuildErrorWidget();
         }
     }
 
@@ -676,7 +683,6 @@ public static class HelpScreen
     };
 
     /// <summary>分配信息行（MaxCount==0 显示不参与分配）</summary>
-    /// <summary>分配信息行（MaxCount==0 显示不参与分配）。</summary>
     private static string GetAllocationLine(RoleTemplate role)
     {
         try
@@ -697,8 +703,21 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.GetAllocationLine]", ex); return default;
+            LightLogger.LogError("[HelpScreen.GetAllocationLine]", ex);
+            return Language.Translate("help.page.error", "该页面加载失败");
         }
+    }
+
+    /// <summary>按注册序号排序的职业列表（字典遍历顺序未定义，保证各页显示稳定）</summary>
+    private static List<RoleTemplate> SortedRoles() =>
+        RoleRegistry.AllRoles.OrderBy(r => r.Id).ThenBy(r => r.CodeName).ToList();
+
+    /// <summary>页面构建失败时的降级提示 widget</summary>
+    private static GUIWidget BuildErrorWidget()
+    {
+        var gui = LIDGUI.Instance;
+        return gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
+            Language.Translate("help.page.error", "该页面加载失败"));
     }
 
     private static string GetBoolText(bool value) =>

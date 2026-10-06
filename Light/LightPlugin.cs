@@ -75,54 +75,9 @@ public partial class LightPlugin : BasePlugin
             // ⚠️ 放在最前面：它只是订阅回调，不碰 Harmony，早挂早抓到。
             try { Light.Diagnostics.ExceptionStackLogger.Hook(); } catch { }
 
-            // ⚠️⚠️ 顺序有意调整过：**先把设置读进来，再挂补丁**。
-            //    原来 PatchAll() 在前、LightSettingsData 赋值在后，于是补丁一挂上
-            //    就有可能在设置还是 null 的时候被调用（SplashManager.Update 每帧都会走
-            //    LoadPatch.Prefix，而它要读 SkipLoadAnimation）。
-            //    只要这两行之间任何一步抛异常，设置就永远是 null、补丁却已经在跑
-            //    → 每帧 NRE、卡在启动页进不去游戏（实测踩过）。
-            //    把赋值提前，从根上消掉这个时序窗口。
             LightSettingsData = LightSettings.LoadSettingData(); // 存设置（必须在 PatchAll 之前）
 
             Harmony.PatchAll(); // 鸿蒙
-            // ⚠️⚠️ **暂时停用，用于排查「创建游戏连线区失败」**（2026-10-04）
-            //
-            //   实测现象：
-            //     · 关掉主插件（只留 API）→ 在线 + 本地**全部正常**
-            //     · 开着主插件 → 在线（除 NikoCN1 外全部）+ 本地**全部失败**
-            //     · 开着主插件 + NikoCN1 → **建房成功**（日志里 GameId=-2000042491/NCNATE）
-            //
-            //   三次尝试的日志序列**完全相同**（UserIDToken → FindHost → 拿到服务器地址 →
-            //   Client requesting new game → Client joining game），**只有 GameId 不同**：
-            //     失败：GameId = 0          成功：GameId = -2000042491
-            //   → 说明**不是网络不通，是服务器（或原版本地 InnerNetServer）拒绝分配 GameId**
-            //     （见 InnerNetClient.CoCreateGame 的 WaitWithTimeout：15 秒拿不到就
-            //       LastCustomDisconnect = "创建游戏连线区失败…" + EnqueueDisconnect("Couldn't connect")）
-            //
-            //   能同时解释「本地也失败」「只有 NikoCN1 能通」「关掉主插件就全好」的，
-            //   只有 MCI 注册 GUID —— 它会进到建房/匹配请求里（HostGame 带 HostGameFilterOptions），
-            //   支持 modded 约定的服（NikoCN1）放行，不支持的（含原版本地服务器）拒绝。
-            //
-            //   AGENTS.md §5.4 已记过相关风险：GUID「自己生成、无需申请；发布后不可更改」，
-            //   且 README 声称的「自动用 HostModdedGame 标签开房」在 19.0 源码里**没有对应实现**。
-            //
-            //   → 若这次能建房，说明要把它做成**可配置项**（私服关、官服开），而不是直接删掉。
-            // ⚠️⚠️ **暂不注册 MCI**（2026-10-04 实测结论，用户决定自研 MCI 后另行实现）
-            //
-            //   设置 CurrentModRegistration.ModRegistrationGuidString 之后，开房路径会从
-            //   Tags.HostGame 切到 Tags.HostModdedGame(25)，而官方文档写明这个通道
-            //   **只由官方服务器和匹配器实现**：
-            //     "This allows **our game server and matchmakers** to mark all the games
-            //      hosted by your mod..." —— Technical Information for Modding Among Us, L128
-            //
-            //   实测后果（开着它的时候）：
-            //     · 第三方私服建房 → 「创建游戏连线区失败」（GameId 恒为 0，WaitWithTimeout 超时）
-            //     · **本地游戏也失败**（内置 InnerNetServer 同样不认 MCI 注册）
-            //     · 只有恰好兼容的服（如 NikoCN1）能建房
-            //   注释掉之后：在线 + 本地**全部正常**。
-            //
-            //   → 用户确认过：**不要设置项**，之后自研 MCI 时再按自己的方案实现。
-            //     在那之前保持这里为"不注册"，否则整个游戏建不了房。
             // CurrentModRegistration.ModRegistrationGuidString = ModGuid;   // [禁用-MCI]
             Log.LogInfo($"Mod Guid {CurrentModRegistration.ModRegistrationGuidString},解析{CurrentModRegistration.TryGetModRegistrationGuid(out _)},协议版本{Constants.GetBroadcastVersion()}");
             if (!VersionMaker.MakeVersion())

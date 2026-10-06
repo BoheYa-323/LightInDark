@@ -590,7 +590,16 @@ public static class GameSettingMenuPatch
     {
         LoadTabAndPresetAssets();
 
-        var page = NewUIObject("LightModSettingsPage", parent, new Vector3(0f, 1.2f, -2.5f));
+        // ⚠️ 不能挂在 RoleSettingsTab 下：切到 MOD 类页签时 ChangeTabPrefix 会把
+        //    RoleSettingsTab 整体 SetActive(false)（不像预设页会打开 PresetsTab），
+        //    挂在其下的占位文字/职业按钮列表会被连带隐藏 → 用户"看不到职业"。
+        //    改挂到其父级（与各克隆菜单同级，切页签不会被关），并换算世界变换，
+        //    保证页内元素视觉位置不变。
+        var root = parent.parent != null ? parent.parent : parent;
+        var page = NewUIObject("LightModSettingsPage", root, Vector3.zero);
+        page.transform.position = parent.TransformPoint(new Vector3(0f, 1.2f, -2.5f));
+        page.transform.rotation = parent.rotation;
+        page.transform.localScale = parent.localScale;
 
         // 占位提示（无内容分类显示「XX页签暂未实现。」）
         _modPlaceholderText = CloneText(page.transform, new Vector3(0f, -0.8f, -0.1f), "", 1.5f);
@@ -1138,9 +1147,9 @@ public static class GameSettingMenuPatch
 
     /// <summary>
     /// 切换 MOD 类页签的内容：
-    ///  - 有对应分类的配置块 → 平铺渲染（调试项在 MOD 页）
-    ///  - 没有 → 占位「XX页签暂未实现。」
-    /// 职业页签按要求固定显示未实现。
+    ///  - 有对应分类的职业块 → 职业按钮列表（点击进该职业配置页）
+    ///  - 有对应分类的其它配置块 → 平铺渲染（调试项在 MOD 页）
+    ///  - 都没有 → 占位「XX页签暂未实现。」
     /// </summary>
     private static void ShowTabConfig(int index)
     {
@@ -1168,19 +1177,26 @@ public static class GameSettingMenuPatch
         // 取该页签对应的配置分类
         var cats = CategoriesForTab(index);
 
+        // 职业块收集成按钮列表（船员/内鬼/中立页签用），其它配置块照旧平铺
+        var roleBlocks = new List<ConfigBlock>();
         bool hasOther = false;
         if (cats != null)
         {
             foreach (var block in ConfigRegistry.Blocks)
             {
                 if (!MatchesCats(block, cats)) continue;
-                if (block.Key.StartsWith("lid.role.")) continue;   // 职业块不参与本轮渲染
+                if (block.Key.StartsWith("lid.role.")) { roleBlocks.Add(block); continue; }
                 hasOther = true;
-                break;
             }
         }
 
-        if (hasOther)
+        if (roleBlocks.Count > 0)
+        {
+            // 职业页签：平铺职业按钮，点击进入该职业的独立配置页
+            Light.UI.Config.ConfigUIPanel.Clear();
+            Light.UI.Config.RoleListPage.Show(roleBlocks, _modPage.transform, OnRoleSelected);
+        }
+        else if (hasOther)
         {
             Light.UI.Config.RoleListPage.Clear();
 
